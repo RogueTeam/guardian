@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -12,9 +13,10 @@ import (
 )
 
 const (
-	ChunkSize  = 256
-	SecretSize = ChunkSize - 1
-	KeySize    = 32
+	ChecksumSize = 512 / 8
+	ChunkSize    = 256
+	DataSize     = ChunkSize - 1
+	KeySize      = 32
 )
 
 func isPrintable(c byte) bool {
@@ -62,8 +64,12 @@ func (a Argon) Stretch(k []byte) (stretch []byte) {
 
 // Struct to manage the data in the data, removing any possibility of heap allocation
 type Data struct {
-	Buffer [ChunkSize]byte
-	Length int
+	Buffer [DataSize]byte
+	Length uint8
+}
+
+func (d *Data) Bytes() []byte {
+	return d.Buffer[:d.Length]
 }
 
 func (d *Data) Release() {
@@ -73,7 +79,7 @@ func (d *Data) Release() {
 
 func RandomData() (d Data) {
 	PrintableRandom(d.Buffer[:])
-	d.Length = SecretSize
+	d.Length = DataSize
 	return d
 }
 
@@ -81,7 +87,7 @@ type Secret struct {
 	IV            [aes.BlockSize]byte
 	Cipher        [ChunkSize]byte
 	KeyArgon      Argon
-	Checksum      [512 / 8]byte
+	Checksum      [ChecksumSize]byte
 	ChecksumArgon Argon
 }
 
@@ -94,29 +100,18 @@ func (s *Secret) Release() {
 	s.ChecksumArgon.Release()
 }
 
-var (
-	ErrInvalidSecretSize = errors.New("invalid secret size")
-	ErrNotPrintable      = errors.New("non printable characters")
-)
+var ErrNotPrintable = errors.New("non printable characters")
 
 // Encrypts the received password and the returns all the information of the encrypted block
 func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
-	if secret.Length > SecretSize {
-		err = fmt.Errorf("%w: max secret size is %d", ErrInvalidSecretSize, SecretSize)
-		return
-	} else if secret.Length == 0 {
-		err = fmt.Errorf("%w: secret cannot be empty", ErrInvalidSecretSize)
-		return
-	}
-
-	for _, value := range key.Buffer[:key.Length] {
+	for _, value := range key.Bytes() {
 		if !isPrintable(value) {
 			err = fmt.Errorf("%w: found non printable in key", ErrNotPrintable)
 			return
 		}
 	}
 
-	for _, value := range secret.Buffer[:secret.Length] {
+	for _, value := range secret.Bytes() {
 		if !isPrintable(value) {
 			err = fmt.Errorf("%w: found non printable in secret", ErrNotPrintable)
 			return
@@ -126,35 +121,70 @@ func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
 	// Stretched key
 	// Setup argon
 	s.KeyArgon = argon
-	stretch := s.KeyArgon.Stretch(key.Buffer[:key.Length])
+	stretchKey := s.KeyArgon.Stretch(key.Bytes())
 	rand.Read(s.IV[:])
 
-	// Prepare the buffer to be encryptoed
-	b := make([]byte, ChunkSize)
-	b[0] = uint8(secret.Length)
-	n := copy(b[1:], secret.Buffer[:secret.Length])
-	PrintableRandom(b[1+n:])
-
+	// Prepare the buffer to be encrypted
 	// Protect memory after been used
 	// Do not wait for the GC to collect it
-	defer rand.Read(b)
+	buffer := make([]byte, ChunkSize)
+	defer rand.Read(buffer)
+
+	buffer[0] = secret.Length
+	n := copy(buffer[1:], secret.Bytes())
+	PrintableRandom(buffer[1+n:])
 
 	// Checksum Buffer
-	// TODO: Update whitepaper using this new hash algorithm
-	// TODO: https://crypto.stackexchange.com/questions/98969/will-hashing-multiple-times-be-more-less-or-similarly-secure-as-hashing-once
+	// Use the same settings as the received Argon settings
+	// This way we ensure the checksum is also computational possible
 	s.ChecksumArgon = s.KeyArgon
 	rand.Read(s.ChecksumArgon.Salt[:])
-	stretchCipher := s.ChecksumArgon.Stretch(s.Cipher[:])
+	stretchBuffer := s.ChecksumArgon.Stretch(buffer)
+
+	// Checksum buffer
 	hash := sha3.New512()
-	hash.Write(stretchCipher)
+	hash.Write(stretchBuffer)
 	copy(s.Checksum[:], hash.Sum(nil))
 
 	// This is impossible to panic since stretch is ensured to be of the valid fixed KeySize
-	block, _ := aes.NewCipher(stretch)
+	block, _ := aes.NewCipher(stretchKey)
 	cbc := cipher.NewCBCEncrypter(block, s.IV[:])
-	cbc.CryptBlocks(s.Cipher[:], b)
+	cbc.CryptBlocks(s.Cipher[:], buffer)
 
 	return
 }
 
-func Decrypt(key, s Secret) {}
+var ErrInvalidPassword = errors.New("invalid password")
+
+// Decrypt the received secret
+func Decrypt(key Data, s Secret) (data Data, err error) {
+	stretchKey := s.KeyArgon.Stretch(key.Bytes())
+
+	buffer := make([]byte, ChunkSize)
+	defer rand.Read(buffer)
+
+	block, _ := aes.NewCipher(stretchKey)
+	cbc := cipher.NewCBCDecrypter(block, s.IV[:])
+	cbc.CryptBlocks(buffer, s.Cipher[:])
+
+	// Stretch buffer
+	stretchBuffer := s.ChecksumArgon.Stretch(buffer)
+
+	// Calculate checksum
+	computedChecksum := make([]byte, ChecksumSize)
+	defer rand.Read(computedChecksum)
+
+	hash := sha3.New512()
+	hash.Write(stretchBuffer)
+	copy(computedChecksum, hash.Sum(nil))
+
+	if !bytes.Equal(computedChecksum, s.Checksum[:]) {
+		err = ErrInvalidPassword
+		return
+	}
+
+	copy(data.Buffer[:], buffer[1:])
+	data.Length = buffer[0]
+
+	return
+}

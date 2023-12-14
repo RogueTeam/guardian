@@ -14,7 +14,9 @@ func TestArgon_Stretch(t *testing.T) {
 		assertions := assert.New(t)
 
 		password := []byte("password")
-		stretch := crypto.DefaultArgon().Stretch(password)
+		argon := crypto.DefaultArgon()
+		defer argon.Release()
+		stretch := argon.Stretch(password)
 		assertions.NotEqual(password, stretch)
 		assertions.Len(stretch, crypto.KeySize)
 	})
@@ -24,6 +26,7 @@ func TestArgon_Stretch(t *testing.T) {
 
 		password := []byte("password")
 		var argon = crypto.DefaultArgon()
+		defer argon.Release()
 		stretch := argon.Stretch(password)
 		assertions.NotEqual(password, stretch)
 		assertions.Len(stretch, crypto.KeySize)
@@ -36,7 +39,9 @@ func TestArgon_Stretch(t *testing.T) {
 
 		password := []byte("password")
 		var argon1 = crypto.DefaultArgon()
+		defer argon1.Release()
 		var argon2 = crypto.DefaultArgon()
+		defer argon2.Release()
 
 		assertions.NotEqual(argon1.Stretch(password), argon2.Stretch(password))
 	})
@@ -93,6 +98,7 @@ func TestJob_Encrypt(t *testing.T) {
 		s := crypto.RandomData()
 		defer s.Release()
 		argon := crypto.DefaultArgon()
+		defer argon.Release()
 		secret, err := crypto.Encrypt(k, s, argon)
 		defer secret.Release()
 		assertions.Nil(err, "No error should be returned: %v", err)
@@ -100,19 +106,21 @@ func TestJob_Encrypt(t *testing.T) {
 		assertions.NotContains(secret.Cipher, k.Buffer[:k.Length])
 		assertions.NotContains(secret.Cipher, s.Buffer[:s.Length])
 	})
-	t.Run("Longer Secret", func(t *testing.T) {
+	t.Run("Empty Key", func(t *testing.T) {
 		t.Parallel()
 		assertions := assert.New(t)
 
 		k := crypto.RandomData()
 		defer k.Release()
+		k.Length = 0
 		s := crypto.RandomData()
 		defer s.Release()
-		s.Length = crypto.ChunkSize
+		s.Length = 0
 		argon := crypto.DefaultArgon()
+		defer argon.Release()
 		secret, err := crypto.Encrypt(k, s, argon)
 		defer secret.Release()
-		assertions.ErrorIs(err, crypto.ErrInvalidSecretSize)
+		assertions.Nil(err)
 	})
 	t.Run("Empty Secret", func(t *testing.T) {
 		t.Parallel()
@@ -124,9 +132,10 @@ func TestJob_Encrypt(t *testing.T) {
 		defer s.Release()
 		s.Length = 0
 		argon := crypto.DefaultArgon()
+		defer argon.Release()
 		secret, err := crypto.Encrypt(k, s, argon)
 		defer secret.Release()
-		assertions.ErrorIs(err, crypto.ErrInvalidSecretSize)
+		assertions.Nil(err)
 	})
 	t.Run("Non printable Key", func(t *testing.T) {
 		t.Parallel()
@@ -138,6 +147,7 @@ func TestJob_Encrypt(t *testing.T) {
 		s := crypto.RandomData()
 		defer s.Release()
 		argon := crypto.DefaultArgon()
+		defer argon.Release()
 		secret, err := crypto.Encrypt(k, s, argon)
 		defer secret.Release()
 		assertions.ErrorIs(err, crypto.ErrNotPrintable)
@@ -152,8 +162,55 @@ func TestJob_Encrypt(t *testing.T) {
 		defer s.Release()
 		s.Buffer[0] = 0 // null
 		argon := crypto.DefaultArgon()
+		defer argon.Release()
 		secret, err := crypto.Encrypt(k, s, argon)
 		defer secret.Release()
 		assertions.ErrorIs(err, crypto.ErrNotPrintable)
+	})
+}
+
+func Test_Decrypt(t *testing.T) {
+	encrypt := func(assertions *assert.Assertions) (key, msg crypto.Data, secret crypto.Secret) {
+		key = crypto.RandomData()
+		msg = crypto.RandomData()
+		argon := crypto.DefaultArgon()
+		defer argon.Release()
+		secret, err := crypto.Encrypt(key, msg, argon)
+		assertions.Nil(err, "No error should be returned: %v", err)
+
+		assertions.NotContains(secret.Cipher, key.Buffer[:key.Length])
+		assertions.NotContains(secret.Cipher, msg.Buffer[:msg.Length])
+
+		return key, msg, secret
+	}
+	t.Run("Succeed", func(t *testing.T) {
+		t.Parallel()
+		assertions := assert.New(t)
+
+		key, msg, secret := encrypt(assertions)
+		defer key.Release()
+		defer msg.Release()
+		defer secret.Release()
+
+		result, err := crypto.Decrypt(key, secret)
+		assertions.Nil(err)
+
+		assertions.Equal(msg.Bytes(), result.Bytes())
+
+	})
+	t.Run("Invalid password", func(t *testing.T) {
+		t.Parallel()
+		assertions := assert.New(t)
+
+		key, msg, secret := encrypt(assertions)
+		key.Release()
+		defer msg.Release()
+		defer secret.Release()
+
+		result, err := crypto.Decrypt(crypto.RandomData(), secret)
+		assertions.NotNil(err)
+
+		assertions.NotEqual(msg.Bytes(), result.Bytes())
+
 	})
 }

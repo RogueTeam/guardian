@@ -104,6 +104,9 @@ var ErrNotPrintable = errors.New("non printable characters")
 
 // Encrypts the received password and the returns all the information of the encrypted block
 func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
+	defer key.Release()
+	defer argon.Release()
+
 	for _, value := range key.Bytes() {
 		if !isPrintable(value) {
 			err = fmt.Errorf("%w: found non printable in key", ErrNotPrintable)
@@ -158,6 +161,9 @@ var ErrInvalidPassword = errors.New("invalid password")
 
 // Decrypt the received secret
 func Decrypt(key Data, s Secret) (data Data, err error) {
+	defer key.Release()
+	defer s.Release()
+
 	stretchKey := s.KeyArgon.Stretch(key.Bytes())
 
 	buffer := make([]byte, ChunkSize)

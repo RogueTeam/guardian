@@ -47,6 +47,13 @@ type Argon struct {
 	Threads uint8
 }
 
+func (a *Argon) Release() {
+	rand.Read(a.Salt[:])
+	a.Time = 0
+	a.Memory = 0
+	a.Threads = 0
+}
+
 // Stretches the unique password for the job based on the master password
 func (a Argon) Stretch(k []byte) (stretch []byte) {
 	stretch = argon2.IDKey(k, a.Salt[:], a.Time, a.Memory, a.Threads, KeySize)
@@ -71,18 +78,20 @@ func RandomData() (d Data) {
 }
 
 type Secret struct {
-	IV           [aes.BlockSize]byte
-	Cipher       [ChunkSize]byte
-	ChecksumSalt [ChunkSize]byte
-	Checksum     [512 / 8]byte
-	Argon        Argon
+	IV            [aes.BlockSize]byte
+	Cipher        [ChunkSize]byte
+	KeyArgon      Argon
+	Checksum      [512 / 8]byte
+	ChecksumArgon Argon
 }
 
-func (e *Secret) Release() {
-	rand.Read(e.IV[:])
-	rand.Read(e.Cipher[:])
-	rand.Read(e.ChecksumSalt[:])
-	rand.Read(e.Checksum[:])
+func (s *Secret) Release() {
+	rand.Read(s.IV[:])
+	rand.Read(s.Cipher[:])
+	rand.Read(s.Checksum[:])
+
+	s.KeyArgon.Release()
+	s.ChecksumArgon.Release()
 }
 
 var (
@@ -115,7 +124,9 @@ func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
 	}
 
 	// Stretched key
-	stretch := argon.Stretch(key.Buffer[:key.Length])
+	// Setup argon
+	s.KeyArgon = argon
+	stretch := s.KeyArgon.Stretch(key.Buffer[:key.Length])
 	rand.Read(s.IV[:])
 
 	// Prepare the buffer to be encryptoed
@@ -131,14 +142,12 @@ func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
 	// Checksum Buffer
 	// TODO: Update whitepaper using this new hash algorithm
 	// TODO: https://crypto.stackexchange.com/questions/98969/will-hashing-multiple-times-be-more-less-or-similarly-secure-as-hashing-once
-	rand.Read(s.ChecksumSalt[:])
+	s.ChecksumArgon = s.KeyArgon
+	rand.Read(s.ChecksumArgon.Salt[:])
+	stretchCipher := s.ChecksumArgon.Stretch(s.Cipher[:])
 	hash := sha3.New512()
-	hash.Write(s.ChecksumSalt[:])
-	hash.Write(s.Cipher[:])
+	hash.Write(stretchCipher)
 	copy(s.Checksum[:], hash.Sum(nil))
-
-	// Setup argon
-	s.Argon = argon
 
 	// This is impossible to panic since stretch is ensured to be of the valid fixed KeySize
 	block, _ := aes.NewCipher(stretch)

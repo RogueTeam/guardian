@@ -50,16 +50,23 @@ func TestEncryption_Release(t *testing.T) {
 		var secret crypto.Secret
 		rand.Read(secret.Cipher[:])
 		rand.Read(secret.IV[:])
-		rand.Read(secret.ChecksumSalt[:])
+		secret.KeyArgon = crypto.DefaultArgon()
+		secret.ChecksumArgon = crypto.DefaultArgon()
 		rand.Read(secret.Checksum[:])
+
+		// Backup
 		c := secret.Cipher
 		iv := secret.IV
-		k := secret.ChecksumSalt
+		ka := secret.KeyArgon
+		ca := secret.ChecksumArgon
 		cs := secret.Checksum
+
 		secret.Release()
+
 		assertions.NotEqual(c, secret.Cipher)
 		assertions.NotEqual(iv, secret.IV)
-		assertions.NotEqual(k, secret.ChecksumSalt)
+		assertions.NotEqual(ka, secret.KeyArgon)
+		assertions.NotEqual(ca, secret.ChecksumArgon)
 		assertions.NotEqual(cs, secret.Checksum)
 	})
 }

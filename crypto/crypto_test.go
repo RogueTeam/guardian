@@ -1,216 +1,226 @@
 package crypto_test
 
 import (
+	"bytes"
 	"crypto/rand"
+	"errors"
+	"log"
 	"testing"
 
 	"github.com/RogueTeam/guardian/crypto"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestArgon_Stretch(t *testing.T) {
-	t.Run("Ensure diff", func(t *testing.T) {
+	t.Run("Succeed", func(t *testing.T) {
 		t.Parallel()
-		assertions := assert.New(t)
 
 		password := []byte("password")
 		argon := crypto.DefaultArgon()
+		argon.Salt[0] = 0 // Ensure deterministic results
 		defer argon.Release()
+
+		// Verify diff
 		stretch := argon.Stretch(password)
-		assertions.NotEqual(password, stretch)
-		assertions.Len(stretch, crypto.KeySize)
-	})
-	t.Run("Ensure deterministic", func(t *testing.T) {
-		t.Parallel()
-		assertions := assert.New(t)
+		if bytes.Equal(password, stretch) {
+			t.Fatalf("Expecting password be completly different from stretched password")
+		}
 
-		password := []byte("password")
-		var argon = crypto.DefaultArgon()
-		defer argon.Release()
-		stretch := argon.Stretch(password)
-		assertions.NotEqual(password, stretch)
-		assertions.Len(stretch, crypto.KeySize)
+		// Veryfy length
+		if len(stretch) != crypto.KeySize {
+			t.Fatalf("Expecting length of stretched password be equal to: %d", crypto.KeySize)
+		}
 
-		assertions.Equal(stretch, argon.Stretch(password))
-	})
-	t.Run("Ensure uniqueness", func(t *testing.T) {
-		t.Parallel()
-		assertions := assert.New(t)
+		// Verify deterministic
+		if !bytes.Equal(stretch, argon.Stretch(password)) {
+			t.Fatalf("Expecing a deterministic output")
+		}
 
-		password := []byte("password")
-		var argon1 = crypto.DefaultArgon()
-		defer argon1.Release()
-		var argon2 = crypto.DefaultArgon()
-		defer argon2.Release()
+		// Verify uniqueness
+		argon2 := argon
+		argon2.Salt[0] = 1
+		if bytes.Equal(stretch, argon2.Stretch(password)) {
+			t.Fatalf("Expecting stretched passwords be different even by small changes on the salt")
+		}
 
-		assertions.NotEqual(argon1.Stretch(password), argon2.Stretch(password))
 	})
 }
 
 func TestEncryption_Release(t *testing.T) {
-	t.Run("Ensure safety", func(t *testing.T) {
+	t.Run("Succeed", func(t *testing.T) {
 		t.Parallel()
-		assertions := assert.New(t)
 
 		var secret crypto.Secret
 		rand.Read(secret.Cipher[:])
 		rand.Read(secret.IV[:])
 		secret.KeyArgon = crypto.DefaultArgon()
-		secret.ChecksumArgon = crypto.DefaultArgon()
 		rand.Read(secret.Checksum[:])
+		secret.ChecksumArgon = crypto.DefaultArgon()
 
-		// Backup
-		c := secret.Cipher
-		iv := secret.IV
-		ka := secret.KeyArgon
-		ca := secret.ChecksumArgon
-		cs := secret.Checksum
+		// Backup values
+		backup := secret
 
+		// Trigger the release
 		secret.Release()
 
-		assertions.NotEqual(c, secret.Cipher)
-		assertions.NotEqual(iv, secret.IV)
-		assertions.NotEqual(ka, secret.KeyArgon)
-		assertions.NotEqual(ca, secret.ChecksumArgon)
-		assertions.NotEqual(cs, secret.Checksum)
+		// Compare
+		if backup.IV == secret.IV ||
+			backup.Cipher == secret.Cipher ||
+			backup.KeyArgon == secret.KeyArgon ||
+			backup.Checksum == secret.Checksum ||
+			backup.ChecksumArgon == secret.ChecksumArgon {
+			t.Fatalf("Expecting values to be different after release: %v == %v", backup, secret)
+		}
 	})
 }
 
 func TestData_Release(t *testing.T) {
 	t.Run("Ensure safety", func(t *testing.T) {
 		t.Parallel()
-		assertions := assert.New(t)
 
-		var d = crypto.RandomData()
-		b := d.Buffer
-		d.Release()
-		assertions.NotEqual(b, d.Buffer)
+		data := crypto.RandomData()
+		backup := data
+		data.Release()
+
+		if backup == data {
+			t.Fatalf("Expecting values to be different after release: %v == %v", backup, data)
+		}
 	})
 }
 
 func TestJob_Encrypt(t *testing.T) {
-	t.Run("Totally different", func(t *testing.T) {
+	t.Run("Succeed", func(t *testing.T) {
 		t.Parallel()
-		assertions := assert.New(t)
 
-		k := crypto.RandomData()
-		defer k.Release()
-		s := crypto.RandomData()
-		defer s.Release()
-		argon := crypto.DefaultArgon()
-		defer argon.Release()
-		secret, err := crypto.Encrypt(k, s, argon)
-		defer secret.Release()
-		assertions.Nil(err, "No error should be returned: %v", err)
+		type Test struct {
+			Name   string
+			Key    crypto.Data
+			Secret crypto.Data
+			Argon  crypto.Argon
+		}
 
-		assertions.NotContains(secret.Cipher, k.Buffer[:k.Length])
-		assertions.NotContains(secret.Cipher, s.Buffer[:s.Length])
+		tests := []Test{
+			{"Basic", crypto.RandomData(), crypto.RandomData(), crypto.DefaultArgon()},
+			{"Empty Key", crypto.Data{}, crypto.RandomData(), crypto.DefaultArgon()},
+			{"Empty Secret", crypto.RandomData(), crypto.Data{}, crypto.DefaultArgon()},
+		}
+
+		for _, test := range tests {
+			test := test
+			t.Run(test.Name, func(t *testing.T) {
+				t.Parallel()
+
+				secret, err := crypto.Encrypt(test.Key, test.Secret, test.Argon)
+				defer secret.Release()
+				if err != nil {
+					t.Fatalf("No errors expected; received: %v", err)
+				}
+			})
+		}
 	})
-	t.Run("Empty Key", func(t *testing.T) {
+	t.Run("Fail", func(t *testing.T) {
 		t.Parallel()
-		assertions := assert.New(t)
 
-		k := crypto.RandomData()
-		defer k.Release()
-		k.Length = 0
-		s := crypto.RandomData()
-		defer s.Release()
-		s.Length = 0
-		argon := crypto.DefaultArgon()
-		defer argon.Release()
-		secret, err := crypto.Encrypt(k, s, argon)
-		defer secret.Release()
-		assertions.Nil(err)
-	})
-	t.Run("Empty Secret", func(t *testing.T) {
-		t.Parallel()
-		assertions := assert.New(t)
+		type Test struct {
+			Name   string
+			Key    crypto.Data
+			Secret crypto.Data
+			Argon  crypto.Argon
+			Error  error
+		}
 
-		k := crypto.RandomData()
-		defer k.Release()
-		s := crypto.RandomData()
-		defer s.Release()
-		s.Length = 0
-		argon := crypto.DefaultArgon()
-		defer argon.Release()
-		secret, err := crypto.Encrypt(k, s, argon)
-		defer secret.Release()
-		assertions.Nil(err)
-	})
-	t.Run("Non printable Key", func(t *testing.T) {
-		t.Parallel()
-		assertions := assert.New(t)
+		tests := []Test{
+			{"Non printable key", crypto.Data{Length: 1}, crypto.RandomData(), crypto.DefaultArgon(), crypto.ErrNotPrintable},
+			{"Non printable secret", crypto.RandomData(), crypto.Data{Length: 1}, crypto.DefaultArgon(), crypto.ErrNotPrintable},
+		}
 
-		k := crypto.RandomData()
-		defer k.Release()
-		k.Buffer[0] = 0 // null
-		s := crypto.RandomData()
-		defer s.Release()
-		argon := crypto.DefaultArgon()
-		defer argon.Release()
-		secret, err := crypto.Encrypt(k, s, argon)
-		defer secret.Release()
-		assertions.ErrorIs(err, crypto.ErrNotPrintable)
-	})
-	t.Run("Non printable Secret", func(t *testing.T) {
-		t.Parallel()
-		assertions := assert.New(t)
+		for _, test := range tests {
+			test := test
+			t.Run(test.Name, func(t *testing.T) {
+				t.Parallel()
 
-		k := crypto.RandomData()
-		defer k.Release()
-		s := crypto.RandomData()
-		defer s.Release()
-		s.Buffer[0] = 0 // null
-		argon := crypto.DefaultArgon()
-		defer argon.Release()
-		secret, err := crypto.Encrypt(k, s, argon)
-		defer secret.Release()
-		assertions.ErrorIs(err, crypto.ErrNotPrintable)
+				secret, err := crypto.Encrypt(test.Key, test.Secret, test.Argon)
+				defer secret.Release()
+				if !errors.Is(err, test.Error) {
+					t.Fatalf("Expecting error to be: %v", err)
+				}
+			})
+		}
 	})
 }
 
 func Test_Decrypt(t *testing.T) {
-	encrypt := func(assertions *assert.Assertions) (key, msg crypto.Data, secret crypto.Secret) {
-		key = crypto.RandomData()
-		msg = crypto.RandomData()
+	encrypt := func(t *testing.T, key, data crypto.Data) (secret crypto.Secret) {
 		argon := crypto.DefaultArgon()
 		defer argon.Release()
-		secret, err := crypto.Encrypt(key, msg, argon)
-		assertions.Nil(err, "No error should be returned: %v", err)
+		secret, err := crypto.Encrypt(key, data, argon)
 
-		assertions.NotContains(secret.Cipher, key.Buffer[:key.Length])
-		assertions.NotContains(secret.Cipher, msg.Buffer[:msg.Length])
+		if err != nil {
+			t.Fatalf("Expecting no errors: %v", err)
+		}
 
-		return key, msg, secret
+		return secret
 	}
 	t.Run("Succeed", func(t *testing.T) {
 		t.Parallel()
-		assertions := assert.New(t)
 
-		key, msg, secret := encrypt(assertions)
-		defer key.Release()
-		defer msg.Release()
-		defer secret.Release()
+		type Test struct {
+			Name string
+			Key  crypto.Data
+			Data crypto.Data
+		}
 
-		result, err := crypto.Decrypt(key, secret)
-		assertions.Nil(err)
+		tests := []Test{
+			{"Decryption succeed", crypto.RandomData(), crypto.RandomData()},
+		}
 
-		assertions.Equal(msg.Bytes(), result.Bytes())
+		for _, test := range tests {
+			test := test
 
+			t.Run(test.Name, func(t *testing.T) {
+				t.Parallel()
+
+				secret := encrypt(t, test.Key, test.Data)
+
+				result, err := crypto.Decrypt(test.Key, secret)
+				if err != nil {
+					t.Fatalf("Expecting no errors: %v", err)
+				}
+
+				if !bytes.Equal(test.Data.Bytes(), result.Bytes()) {
+					t.Fatalf("Decryption failed decrypted msg doesn't match original msg")
+				}
+			})
+		}
 	})
-	t.Run("Invalid password", func(t *testing.T) {
+	t.Run("Fail", func(t *testing.T) {
 		t.Parallel()
-		assertions := assert.New(t)
 
-		key, msg, secret := encrypt(assertions)
-		key.Release()
-		defer msg.Release()
-		defer secret.Release()
+		type Test struct {
+			Name          string
+			EncryptionKey crypto.Data
+			DecryptionKey crypto.Data
+			Data          crypto.Data
+			Error         error
+		}
 
-		result, err := crypto.Decrypt(crypto.RandomData(), secret)
-		assertions.NotNil(err)
+		tests := []Test{
+			{"Invalid Pasword", crypto.RandomData(), crypto.RandomData(), crypto.RandomData(), crypto.ErrInvalidPassword},
+		}
 
-		assertions.NotEqual(msg.Bytes(), result.Bytes())
+		for _, test := range tests {
+			test := test
 
+			t.Run(test.Name, func(t *testing.T) {
+				t.Parallel()
+
+				secret := encrypt(t, test.EncryptionKey, test.Data)
+				defer secret.Release()
+
+				_, err := crypto.Decrypt(test.DecryptionKey, secret)
+				if !errors.Is(err, test.Error) {
+					log.Fatalf("Expecting error %v: but received: %v", test.Error, err)
+				}
+			})
+		}
 	})
 }

@@ -103,7 +103,7 @@ func (s *Secret) Release() {
 var ErrNotPrintable = errors.New("non printable characters")
 
 // Encrypts the received password and the returns all the information of the encrypted block
-func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
+func Encrypt(key, data Data, argon Argon) (secret Secret, err error) {
 	defer key.Release()
 	defer argon.Release()
 
@@ -114,7 +114,7 @@ func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
 		}
 	}
 
-	for _, value := range secret.Bytes() {
+	for _, value := range data.Bytes() {
 		if !isPrintable(value) {
 			err = fmt.Errorf("%w: found non printable in secret", ErrNotPrintable)
 			return
@@ -123,9 +123,9 @@ func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
 
 	// Stretched key
 	// Setup argon
-	s.KeyArgon = argon
-	stretchKey := s.KeyArgon.Stretch(key.Bytes())
-	rand.Read(s.IV[:])
+	secret.KeyArgon = argon
+	stretchKey := secret.KeyArgon.Stretch(key.Bytes())
+	rand.Read(secret.IV[:])
 
 	// Prepare the buffer to be encrypted
 	// Protect memory after been used
@@ -133,26 +133,26 @@ func Encrypt(key, secret Data, argon Argon) (s Secret, err error) {
 	buffer := make([]byte, ChunkSize)
 	defer rand.Read(buffer)
 
-	buffer[0] = secret.Length
-	n := copy(buffer[1:], secret.Bytes())
+	buffer[0] = data.Length
+	n := copy(buffer[1:], data.Bytes())
 	PrintableRandom(buffer[1+n:])
 
 	// Checksum Buffer
 	// Use the same settings as the received Argon settings
 	// This way we ensure the checksum is also computational possible
-	s.ChecksumArgon = s.KeyArgon
-	rand.Read(s.ChecksumArgon.Salt[:])
-	stretchBuffer := s.ChecksumArgon.Stretch(buffer)
+	secret.ChecksumArgon = secret.KeyArgon
+	rand.Read(secret.ChecksumArgon.Salt[:])
+	stretchBuffer := secret.ChecksumArgon.Stretch(buffer)
 
 	// Checksum buffer
 	hash := sha3.New512()
 	hash.Write(stretchBuffer)
-	copy(s.Checksum[:], hash.Sum(nil))
+	copy(secret.Checksum[:], hash.Sum(nil))
 
 	// This is impossible to panic since stretch is ensured to be of the valid fixed KeySize
 	block, _ := aes.NewCipher(stretchKey)
-	cbc := cipher.NewCBCEncrypter(block, s.IV[:])
-	cbc.CryptBlocks(s.Cipher[:], buffer)
+	cbc := cipher.NewCBCEncrypter(block, secret.IV[:])
+	cbc.CryptBlocks(secret.Cipher[:], buffer)
 
 	return
 }

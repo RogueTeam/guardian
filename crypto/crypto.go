@@ -20,22 +20,20 @@ const (
 )
 
 type Argon struct {
-	Salt    [ChunkSize]byte
-	Time    uint32
-	Memory  uint32
-	Threads uint8
+	Time    uint32 `json:"time"`
+	Memory  uint32 `json:"memory"`
+	Threads uint8  `json:"threads"`
 }
 
 func (a *Argon) Release() {
-	rand.Read(a.Salt[:])
 	a.Time = 0
 	a.Memory = 0
 	a.Threads = 0
 }
 
 // Stretches the unique password for the job based on the master password
-func (a Argon) Stretch(k []byte) (stretch []byte) {
-	stretch = argon2.IDKey(k, a.Salt[:], a.Time, a.Memory, a.Threads, KeySize)
+func (a Argon) Stretch(k []byte, salt []byte) (stretch []byte) {
+	stretch = argon2.IDKey(k, salt, a.Time, a.Memory, a.Threads, KeySize)
 	return stretch
 }
 
@@ -55,29 +53,42 @@ func (d *Data) Release() {
 }
 
 type Secret struct {
-	IV            [aes.BlockSize]byte
-	Cipher        [ChunkSize]byte
-	KeyArgon      Argon
-	Checksum      [ChecksumSize]byte
-	ChecksumArgon Argon
+	IV           [aes.BlockSize]byte `json:"iv"`
+	Cipher       [ChunkSize]byte     `json:"cipher"`
+	Checksum     [ChecksumSize]byte  `json:"checksum"`
+	KeySalt      [ChunkSize]byte     `json:"keySalt"`
+	ChecksumSalt [ChunkSize]byte     `json:"checksumSalt"`
+	Argon        Argon               `json:"argon"`
 }
 
 func (s *Secret) Release() {
 	rand.Read(s.IV[:])
 	rand.Read(s.Cipher[:])
 	rand.Read(s.Checksum[:])
+	rand.Read(s.KeySalt[:])
+	rand.Read(s.ChecksumSalt[:])
 
-	s.KeyArgon.Release()
-	s.ChecksumArgon.Release()
+	s.Argon.Release()
+}
+
+// Init initialize IV and Salts
+func (s *Secret) Init() {
+	rand.Read(s.IV[:])
+	rand.Read(s.KeySalt[:])
+	rand.Read(s.ChecksumSalt[:])
 }
 
 var ErrNotPrintable = errors.New("non printable characters")
 
-// Encrypts the received password and the returns all the information of the encrypted block
-func Encrypt(key, data Data, argon Argon) (secret Secret, err error) {
-	defer key.Release()
-	defer argon.Release()
+// Encrypts the received secret
+func Encrypt(key, data *Data, argon *Argon) (secret Secret, err error) {
+	defer func() {
+		if err != nil {
+			secret.Release()
+		}
+	}()
 
+	// Verify secure key
 	for _, value := range key.Bytes() {
 		if !isPrintable(value) {
 			err = fmt.Errorf("%w: found non printable in key", ErrNotPrintable)
@@ -85,6 +96,7 @@ func Encrypt(key, data Data, argon Argon) (secret Secret, err error) {
 		}
 	}
 
+	// Verify secure data
 	for _, value := range data.Bytes() {
 		if !isPrintable(value) {
 			err = fmt.Errorf("%w: found non printable in secret", ErrNotPrintable)
@@ -92,11 +104,14 @@ func Encrypt(key, data Data, argon Argon) (secret Secret, err error) {
 		}
 	}
 
-	// Stretched key
+	// Initialize secret
+	secret.Init()
+
 	// Setup argon
-	secret.KeyArgon = argon
-	stretchKey := secret.KeyArgon.Stretch(key.Bytes())
-	rand.Read(secret.IV[:])
+	secret.Argon = *argon
+
+	// Stretched key
+	stretchKey := secret.Argon.Stretch(key.Bytes(), secret.KeySalt[:])
 
 	// Prepare the buffer to be encrypted
 	// Protect memory after been used
@@ -111,9 +126,8 @@ func Encrypt(key, data Data, argon Argon) (secret Secret, err error) {
 	// Checksum Buffer
 	// Use the same settings as the received Argon settings
 	// This way we ensure the checksum is also computational possible
-	secret.ChecksumArgon = secret.KeyArgon
-	rand.Read(secret.ChecksumArgon.Salt[:])
-	stretchBuffer := secret.ChecksumArgon.Stretch(buffer)
+	rand.Read(secret.ChecksumSalt[:])
+	stretchBuffer := secret.Argon.Stretch(buffer, secret.ChecksumSalt[:])
 
 	// Checksum buffer
 	hash := sha3.New512()
@@ -131,35 +145,44 @@ func Encrypt(key, data Data, argon Argon) (secret Secret, err error) {
 var ErrInvalidPassword = errors.New("invalid password")
 
 // Decrypt the received secret
-func Decrypt(key Data, s Secret) (data Data, err error) {
-	defer key.Release()
-	defer s.Release()
+func Decrypt(key *Data, secret *Secret) (data Data, err error) {
+	defer func() {
+		if err != nil {
+			data.Release()
+		}
+	}()
 
-	stretchKey := s.KeyArgon.Stretch(key.Bytes())
+	// Stretch key
+	stretchKey := secret.Argon.Stretch(key.Bytes(), secret.KeySalt[:])
 
+	// Reserve decryption buffer
 	buffer := make([]byte, ChunkSize)
 	defer rand.Read(buffer)
 
+	// Decrypt
 	block, _ := aes.NewCipher(stretchKey)
-	cbc := cipher.NewCBCDecrypter(block, s.IV[:])
-	cbc.CryptBlocks(buffer, s.Cipher[:])
+	cbc := cipher.NewCBCDecrypter(block, secret.IV[:])
+	cbc.CryptBlocks(buffer, secret.Cipher[:])
 
 	// Stretch buffer
-	stretchBuffer := s.ChecksumArgon.Stretch(buffer)
+	stretchBuffer := secret.Argon.Stretch(buffer, secret.ChecksumSalt[:])
 
 	// Calculate checksum
 	computedChecksum := make([]byte, ChecksumSize)
 	defer rand.Read(computedChecksum)
 
+	// Calculate checksum
 	hash := sha3.New512()
 	hash.Write(stretchBuffer)
 	copy(computedChecksum, hash.Sum(nil))
 
-	if !bytes.Equal(computedChecksum, s.Checksum[:]) {
+	// Verify checksum
+	if !bytes.Equal(computedChecksum, secret.Checksum[:]) {
 		err = ErrInvalidPassword
 		return
 	}
 
+	// Return result
 	copy(data.Buffer[:], buffer[1:])
 	data.Length = buffer[0]
 

@@ -1,3 +1,5 @@
+//go:build fuzz
+
 package crypto_test
 
 import (

@@ -19,29 +19,6 @@ const (
 	KeySize      = 32
 )
 
-func isPrintable(c byte) bool {
-	return c >= 33 && c <= 126
-}
-
-// Only returns printable ascii characters from the random source
-func PrintableRandom(b []byte) {
-	var random [ChunkSize]byte
-	defer rand.Read(random[:])
-
-	for index := 0; index < len(b); {
-		rand.Read(random[:])
-		for _, value := range random {
-			if index >= len(b) {
-				break
-			}
-			if isPrintable(value) {
-				b[index] = value
-				index++
-			}
-		}
-	}
-}
-
 type Argon struct {
 	Salt    [ChunkSize]byte
 	Time    uint32
@@ -75,12 +52,6 @@ func (d *Data) Bytes() []byte {
 func (d *Data) Release() {
 	rand.Read(d.Buffer[:])
 	d.Length = 0
-}
-
-func RandomData() (d Data) {
-	PrintableRandom(d.Buffer[:])
-	d.Length = DataSize
-	return d
 }
 
 type Secret struct {

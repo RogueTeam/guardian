@@ -18,13 +18,15 @@ const (
 	validCharacters = lower + upper + digits + symbols
 )
 
-var validCharactersBuffer = []byte(validCharacters)
+var (
+	validCharactersBuffer = []byte(validCharacters)
+	countValidCharacters  = big.NewInt(int64(len(validCharacters)))
+)
 
 // Only returns printable ascii characters from the random source
 func PrintableRandom(b []byte) {
-	max := big.NewInt(int64(len(validCharacters)))
 	for index := range b {
-		srcIndex, err := rand.Int(rand.Reader, max)
+		srcIndex, err := rand.Int(rand.Reader, countValidCharacters)
 		if err != nil {
 			slog.Error("Failed to read random data")
 		}

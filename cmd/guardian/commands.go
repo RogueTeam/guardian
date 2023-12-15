@@ -8,4 +8,5 @@ import (
 var registered = []commands.Command{
 	subcommands.HelpCommand,
 	subcommands.PasswordCommand,
+	subcommands.SecretsCommand,
 }

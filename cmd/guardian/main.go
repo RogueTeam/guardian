@@ -30,6 +30,8 @@ func main() {
 	}
 
 	switch result := result.(type) {
+	case nil:
+		fmt.Fprintf(os.Stderr, "Command exited successfully!")
 	case string, int, float64:
 		fmt.Fprintf(os.Stdout, "%v", result)
 	default:

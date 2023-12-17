@@ -10,100 +10,90 @@
 package database
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/RogueTeam/guardian/crypto"
 )
 
 type Database struct {
-	File    *os.File                  `json:"-"`
-	Secrets map[string]*crypto.Secret `json:"secrets"`
+	Secrets map[string]string `json:"secrets"`
 }
 
-func (db *Database) Release() {
-	db.File.Close()
-
-	for _, secret := range db.Secrets {
-		secret.Release()
-	}
-	clear(db.Secrets)
+func (db *Database) Set(id string, data string) {
+	db.Secrets[id] = data
 }
 
-func (db *Database) SetSecret(id string, key, data *crypto.Data, argon *crypto.Argon) (err error) {
-	secret, err := crypto.Encrypt(key, data, argon)
-	if err != nil {
-		err = fmt.Errorf("failed to encrypt: %w", err)
-		return
-	}
-
-	if _, found := db.Secrets[id]; !found {
-		db.Secrets[id] = new(crypto.Secret)
-	}
-	*db.Secrets[id] = secret
-	return
-}
-
-func (db *Database) GetSecret(id string, key *crypto.Data) (data crypto.Data, err error) {
-	secret, found := db.Secrets[id]
+func (db *Database) Get(id string) (data string, err error) {
+	data, found := db.Secrets[id]
 	if !found {
-		return
-	}
-	data, err = crypto.Decrypt(key, secret)
-	if err != nil {
-		err = fmt.Errorf("failed to decrypt secret: %w", err)
-		data.Release()
+		err = fmt.Errorf("no entry found with id: %s", id)
 	}
 	return
 }
 
-func (db *Database) DelSecret(id string) {
-	secret, found := db.Secrets[id]
-	if found {
-		delete(db.Secrets, id)
-		secret.Release()
-	}
-}
-
-func (db *Database) Save() (err error) {
-	_, err = db.File.Seek(0, 0)
-	if err != nil {
-		err = fmt.Errorf("failed to seek file: %w", err)
-		return err
-	}
-	err = json.NewEncoder(db.File).Encode(db)
-	if err != nil {
-		err = fmt.Errorf("failed to encode file: %w", err)
-	}
-	return err
-}
-
-// Key is the master key for the database
-// File is the final FS file to write all the changes
-func Open(file *os.File) (db *Database, err error) {
-
-	db = &Database{
-		File: file,
-	}
-
-	stat, err := file.Stat()
-	if err != nil {
-		err = fmt.Errorf("failed to obtain stat from file: %w", err)
+func (db *Database) Del(id string) (err error) {
+	_, found := db.Secrets[id]
+	if !found {
+		err = fmt.Errorf("no entry found with id: %s", id)
 		return
 	}
 
-	if stat.Size() == 0 {
-		db.Secrets = make(map[string]*crypto.Secret)
+	delete(db.Secrets, id)
+	return
+}
+
+func (db *Database) Save(key []byte, saltSize int, argon *crypto.Argon, w io.Writer) (err error) {
+	var buffer bytes.Buffer
+	json.NewEncoder(&buffer).Encode(db)
+
+	var job = crypto.Job{
+		Key:      make([]byte, len(key)),
+		Data:     buffer.Bytes(),
+		Argon:    *argon,
+		SaltSize: saltSize,
+	}
+	copy(job.Key, key)
+	defer job.Release()
+
+	secret := job.Encrypt()
+	defer secret.Release()
+	err = json.NewEncoder(w).Encode(secret)
+	return
+}
+
+func New() (db *Database) {
+	return &Database{
+		Secrets: make(map[string]string),
+	}
+}
+
+func Open(key []byte, r io.Reader) (db *Database, err error) {
+	var secret crypto.Secret
+	defer secret.Release()
+	err = json.NewDecoder(r).Decode(&secret)
+	if err != nil {
+		err = fmt.Errorf("failed to decode secret: %w", err)
 		return
 	}
 
-	err = json.NewDecoder(file).Decode(db)
+	var job = crypto.Job{
+		Key: make([]byte, len(key)),
+	}
+	copy(job.Key, key)
+	defer job.Release()
+	err = job.Decrypt(&secret)
 	if err != nil {
-		err = fmt.Errorf("failed to decode json: %w", err)
-		db.Release()
-		db = nil
+		err = fmt.Errorf("error during decryption: %w", err)
+		return
 	}
 
+	db = New()
+	err = json.Unmarshal(job.Data, db)
+	if err != nil {
+		err = fmt.Errorf("failed to decode JSON database: %w", err)
+	}
 	return
 }

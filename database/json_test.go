@@ -1,8 +1,7 @@
 package database_test
 
 import (
-	"fmt"
-	"os"
+	"bytes"
 	"testing"
 
 	"github.com/RogueTeam/guardian/crypto"
@@ -12,34 +11,48 @@ import (
 func TestJson(t *testing.T) {
 	t.Parallel()
 
-	createTemp := func() (file *os.File, closeFunc func()) {
-		file, err := os.CreateTemp("", "*")
-		if err != nil {
-			t.Fatalf("Failed to create file: %v", err)
-		}
-
-		closeFunc = func() {
-			file.Close()
-			os.RemoveAll(file.Name())
-		}
-
-		return file, closeFunc
-	}
 	t.Run("Secret management", func(t *testing.T) {
 		t.Parallel()
 
-		key := crypto.RandomData()
-		defer key.Release()
-		file, closeFunc := createTemp()
-		defer file.Close()
-		defer closeFunc()
+		var key = []byte("password")
+		const id = "github.com"
+		const value = "username:password"
 
-		j, err := database.Open(file)
-		if err != nil {
-			t.Fatalf("Expecting no errors, received: %v", err)
+		var original bytes.Buffer
+		{
+			var db = database.New()
+			db.Set(id, value)
+
+			argon := crypto.DefaultArgon()
+			defer argon.Release()
+			err := db.Save(key, 1024, &argon, &original)
+			if err != nil {
+				t.Fatalf("expecting no errors, but received: %v", err)
+			}
 		}
 
-		fmt.Println(j)
+		db, err := database.Open(key, bytes.NewReader(original.Bytes()))
+		if err != nil {
+			t.Fatalf("expecting no errors, but received: %v", err)
+		}
 
+		data, err := db.Get(id)
+		if err != nil {
+			t.Fatalf("expecting no errors, but received: %v", err)
+		}
+
+		if value != data {
+			t.Fatalf("expecting %s but received: %s", value, data)
+		}
+
+		err = db.Del(id)
+		if err != nil {
+			t.Fatalf("expecting no errors, but received: %v", err)
+		}
+
+		_, err = db.Get(id)
+		if err == nil {
+			t.Fatal("expecting error")
+		}
 	})
 }

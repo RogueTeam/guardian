@@ -4,20 +4,73 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"errors"
-	"fmt"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/sha3"
 )
 
+var (
+	ErrDecryptionFailed = errors.New("decryption failed")
+)
+
 const (
 	ChecksumSize = 512 / 8
 	ChunkSize    = 256
+	SaltSize     = 512
+	IVSize       = aes.BlockSize
 	DataSize     = ChunkSize - 1
 	KeySize      = 32
 )
+
+type Secret struct {
+	// Configuration for the argon function
+	Argon Argon `json:"argon"`
+
+	// Initialization Vector (IV)
+	// To initialize it always all the Init() function
+	IV []byte `json:"iv"`
+
+	// Key salt is the Argon Salt to use for the key stretching process
+	// To initialize it always all the Init() function
+	KeySalt []byte `json:"keySalt"`
+
+	// Checksum salt is the Argon Salt to use for the checksum stretching process
+	// To initialize it always all the Init() function
+	ChecksumSalt []byte `json:"checksumSalt"`
+
+	// Salt used for the HMAC calculation
+	HMACSalt []byte `json:"hmacSalt"`
+
+	// Checksum is 512 bits (256 bytes) long Cryptographic checksum
+	// Algorithm used is SHA3-512
+	// The checksum is computed for the output of the: stretch_cipher = Argon(cipher, salt) -> sha3_512(stretch_cipher)
+	// This checksum is used to verify the decrypted buffer was correct
+	Checksum []byte `json:"checksum"`
+
+	// The actual cipher text created after encrypting the msg
+	// Divided in blocks of 256 bytes
+	// The last block correspond to the actual data and a padding. Of which to prevent Padding oracle attack
+	// The padding is always a valid number
+	Cipher []byte `json:"cipher"`
+
+	// HMAC is used to verify the authenticity of the encrypted cipher
+	// This will ensure the algorithm enver tries to decrypt data user never encrypted
+	HMAC []byte `json:"hmac"`
+}
+
+func (s *Secret) Release() {
+	s.Argon.Release()
+	rand.Read(s.IV)
+	rand.Read(s.KeySalt)
+	rand.Read(s.ChecksumSalt)
+	rand.Read(s.HMACSalt)
+	rand.Read(s.Checksum)
+	rand.Read(s.Cipher)
+	rand.Read(s.HMAC)
+}
 
 type Argon struct {
 	Time    uint32 `json:"time"`
@@ -31,160 +84,104 @@ func (a *Argon) Release() {
 	a.Threads = 0
 }
 
-// Stretches the unique password for the job based on the master password
-func (a Argon) Stretch(k []byte, salt []byte) (stretch []byte) {
-	stretch = argon2.IDKey(k, salt, a.Time, a.Memory, a.Threads, KeySize)
-	return stretch
+type Job struct {
+	Key, Data []byte
+	Argon     Argon
+	SaltSize  int
 }
 
-// Struct to manage the data in the data, removing any possibility of heap allocation
-type Data struct {
-	Buffer [DataSize]byte
-	Length uint8
+func (j *Job) Release() {
+	rand.Read(j.Key)
+	rand.Read(j.Data)
+	j.Argon.Release()
+	j.SaltSize = 0
 }
 
-func (d *Data) Bytes() []byte {
-	return d.Buffer[:d.Length]
-}
-
-func (d *Data) Release() {
-	rand.Read(d.Buffer[:])
-	d.Length = 0
-}
-
-type Secret struct {
-	IV           [aes.BlockSize]byte `json:"iv"`
-	Cipher       [ChunkSize]byte     `json:"cipher"`
-	Checksum     [ChecksumSize]byte  `json:"checksum"`
-	KeySalt      [ChunkSize]byte     `json:"keySalt"`
-	ChecksumSalt [ChunkSize]byte     `json:"checksumSalt"`
-	Argon        Argon               `json:"argon"`
-}
-
-func (s *Secret) Release() {
-	rand.Read(s.IV[:])
-	rand.Read(s.Cipher[:])
-	rand.Read(s.Checksum[:])
-	rand.Read(s.KeySalt[:])
-	rand.Read(s.ChecksumSalt[:])
-
-	s.Argon.Release()
-}
-
-// Init initialize IV and Salts
-func (s *Secret) Init() {
-	rand.Read(s.IV[:])
-	rand.Read(s.KeySalt[:])
-	rand.Read(s.ChecksumSalt[:])
-}
-
-var ErrNotPrintable = errors.New("non printable characters")
-
-// Encrypts the received secret
-func Encrypt(key, data *Data, argon *Argon) (secret Secret, err error) {
-	defer func() {
-		if err != nil {
-			secret.Release()
-		}
-	}()
-
-	// Verify secure key
-	for _, value := range key.Bytes() {
-		if !isPrintable(value) {
-			err = fmt.Errorf("%w: found non printable in key", ErrNotPrintable)
-			return
-		}
+// Prepares a secret structure with a ready to use IV and salts
+func (j *Job) Encrypt() (secret *Secret) {
+	dataLength := ChunkSize * (1 + len(j.Data)/ChunkSize)
+	secret = &Secret{
+		Argon:        j.Argon,
+		IV:           make([]byte, IVSize),
+		KeySalt:      make([]byte, j.SaltSize),
+		ChecksumSalt: make([]byte, j.SaltSize),
+		HMACSalt:     make([]byte, j.SaltSize),
+		Cipher:       make([]byte, dataLength),
 	}
+	// Prepare random data
+	rand.Read(secret.IV)
+	rand.Read(secret.KeySalt)
+	rand.Read(secret.ChecksumSalt)
+	rand.Read(secret.HMACSalt)
 
-	// Verify secure data
-	for _, value := range data.Bytes() {
-		if !isPrintable(value) {
-			err = fmt.Errorf("%w: found non printable in secret", ErrNotPrintable)
-			return
-		}
-	}
-
-	// Initialize secret
-	secret.Init()
-
-	// Setup argon
-	secret.Argon = *argon
-
-	// Stretched key
-	stretchKey := secret.Argon.Stretch(key.Bytes(), secret.KeySalt[:])
-
-	// Prepare the buffer to be encrypted
-	// Protect memory after been used
-	// Do not wait for the GC to collect it
-	buffer := make([]byte, ChunkSize)
-	defer rand.Read(buffer)
-
-	buffer[0] = data.Length
-	n := copy(buffer[1:], data.Bytes())
-	PrintableRandom(buffer[1+n:])
-
-	// Checksum Buffer
-	// Use the same settings as the received Argon settings
-	// This way we ensure the checksum is also computational possible
-	rand.Read(secret.ChecksumSalt[:])
-	stretchBuffer := secret.Argon.Stretch(buffer, secret.ChecksumSalt[:])
-
-	// Checksum buffer
-	hash := sha3.New512()
-	hash.Write(stretchBuffer)
-	copy(secret.Checksum[:], hash.Sum(nil))
-
-	// This is impossible to panic since stretch is ensured to be of the valid fixed KeySize
-	block, _ := aes.NewCipher(stretchKey)
-	cbc := cipher.NewCBCEncrypter(block, secret.IV[:])
-	cbc.CryptBlocks(secret.Cipher[:], buffer)
-
-	return
-}
-
-var ErrInvalidPassword = errors.New("invalid password")
-
-// Decrypt the received secret
-func Decrypt(key *Data, secret *Secret) (data Data, err error) {
-	defer func() {
-		if err != nil {
-			data.Release()
-		}
-	}()
-
-	// Stretch key
-	stretchKey := secret.Argon.Stretch(key.Bytes(), secret.KeySalt[:])
-
-	// Reserve decryption buffer
-	buffer := make([]byte, ChunkSize)
-	defer rand.Read(buffer)
-
-	// Decrypt
-	block, _ := aes.NewCipher(stretchKey)
-	cbc := cipher.NewCBCDecrypter(block, secret.IV[:])
-	cbc.CryptBlocks(buffer, secret.Cipher[:])
-
-	// Stretch buffer
-	stretchBuffer := secret.Argon.Stretch(buffer, secret.ChecksumSalt[:])
+	// Prepare data to encrypt
+	data := make([]byte, dataLength)
+	defer rand.Read(data)
+	copy(data, j.Data)
+	rand.Read(data[len(j.Data):])
+	data[dataLength-1] = byte(dataLength - len(j.Data))
 
 	// Calculate checksum
-	computedChecksum := make([]byte, ChecksumSize)
-	defer rand.Read(computedChecksum)
-
-	// Calculate checksum
+	rawChecksum := argon2.IDKey(data, secret.ChecksumSalt, secret.Argon.Time, secret.Argon.Memory, secret.Argon.Threads, ChecksumSize)
 	hash := sha3.New512()
-	hash.Write(stretchBuffer)
-	copy(computedChecksum, hash.Sum(nil))
+	hash.Write(rawChecksum)
+	secret.Checksum = hash.Sum(nil)
+
+	// Prepare encryption key
+	key := argon2.IDKey(j.Key, secret.KeySalt, secret.Argon.Time, secret.Argon.Memory, secret.Argon.Threads, KeySize)
+
+	// Encrypt data
+	// Error doesn't need verification because key is always of valid size, thanks to argon
+	block, _ := aes.NewCipher(key)
+	enc := cipher.NewCBCEncrypter(block, secret.IV)
+	enc.CryptBlocks(secret.Cipher, data)
+
+	// Calculate HMAC sum
+	hmacKey := argon2.IDKey(j.Key, secret.HMACSalt, secret.Argon.Time, secret.Argon.Memory, secret.Argon.Threads, KeySize)
+	hash = hmac.New(sha3.New512, hmacKey)
+	hash.Write(secret.Cipher)
+	secret.HMAC = hash.Sum(nil)
+
+	return secret
+}
+
+// Decrypt populates the Data field of Job struct with the decrypted secret on success
+// On failure returns ErrDecryptionFailed
+func (j *Job) Decrypt(secret *Secret) (err error) {
+	// Verify HMAC
+	hmacKey := argon2.IDKey(j.Key, secret.HMACSalt, secret.Argon.Time, secret.Argon.Memory, secret.Argon.Threads, KeySize)
+	hash := hmac.New(sha3.New512, hmacKey)
+	hash.Write(secret.Cipher)
+	computedHMAC := hash.Sum(nil)
+	if !bytes.Equal(secret.HMAC, computedHMAC) {
+		return ErrDecryptionFailed
+	}
+
+	// Prepare decrypt buffer
+	data := make([]byte, len(secret.Cipher))
+	defer rand.Read(data)
+
+	// Prepare decryption key
+	key := argon2.IDKey(j.Key, secret.KeySalt, secret.Argon.Time, secret.Argon.Memory, secret.Argon.Threads, KeySize)
+
+	// Decrypt data
+	block, _ := aes.NewCipher(key)
+	enc := cipher.NewCBCDecrypter(block, secret.IV)
+	enc.CryptBlocks(data, secret.Cipher)
 
 	// Verify checksum
-	if !bytes.Equal(computedChecksum, secret.Checksum[:]) {
-		err = ErrInvalidPassword
-		return
+	rawChecksum := argon2.IDKey(data, secret.ChecksumSalt, secret.Argon.Time, secret.Argon.Memory, secret.Argon.Threads, ChecksumSize)
+	hash = sha3.New512()
+	hash.Write(rawChecksum)
+	computedChecksum := hash.Sum(nil)
+	if !bytes.Equal(secret.Checksum, computedChecksum) {
+		return ErrDecryptionFailed
 	}
 
-	// Return result
-	copy(data.Buffer[:], buffer[1:])
-	data.Length = buffer[0]
+	// Copy Data
+	realLength := len(data) - int(data[len(data)-1])
+	j.Data = make([]byte, realLength)
+	copy(j.Data, data[:realLength])
 
-	return
+	return err
 }

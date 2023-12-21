@@ -18,21 +18,24 @@ type (
 	Setup    func(ctx *Context, flags map[string]any) (err error)
 	Callback func(ctx *Context, flags map[string]any, args map[string]any) (result any, err error)
 	Value    struct {
-		Type Type
-		Name string
+		Type        Type
+		Name        string
+		Description string
 	}
+	Values  []Value
 	Context struct {
 		entries map[any]any
 	}
 	Command struct {
 		Name        string
 		Description string
-		Args        []Value
-		Flags       []Value
+		Args        Values
+		Flags       Values
 		Setup       Setup
 		Callback    Callback
-		SubCommands []Command
+		SubCommands Commands
 	}
+	Commands []Command
 )
 
 func NewContext() *Context {

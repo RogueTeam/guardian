@@ -10,7 +10,13 @@ type node struct {
 	SubCommands map[string]node
 }
 
+const HelpCommand = "help"
+
 func (c *Command) tree() (n node) {
+	if c.Name != HelpCommand {
+		c.setHelp()
+	}
+
 	n.Name = c.Name
 	n.Description = c.Description
 

@@ -3,6 +3,7 @@ package commands_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/RogueTeam/guardian/internal/commands"
@@ -23,9 +24,17 @@ func TestCommand_Run(t *testing.T) {
 
 		tests := []Test{
 			{
+				Name: "Help message",
+				Root: commands.Command{
+					Args: []commands.Value{{commands.TypeString, "string", "description"}},
+				},
+				Args:   []string{"help"},
+				Expect: "Usage:",
+			},
+			{
 				Name: "Simple command with flags in root and arguments in subcommand",
 				Root: commands.Command{
-					Flags: []commands.Value{{commands.TypeString, "file"}},
+					Flags: []commands.Value{{commands.TypeString, "file", ""}},
 					Setup: func(ctx *commands.Context, flags map[string]any) (err error) {
 						ctx.Set("file", flags["file"])
 
@@ -34,8 +43,8 @@ func TestCommand_Run(t *testing.T) {
 					SubCommands: []commands.Command{
 						{
 							Name:  "init",
-							Flags: []commands.Value{{commands.TypeBool, "with-db"}},
-							Args:  []commands.Value{{commands.TypeString, "user"}},
+							Flags: []commands.Value{{commands.TypeBool, "with-db", ""}},
+							Args:  []commands.Value{{commands.TypeString, "user", ""}},
 							Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
 								result = fmt.Sprintf("%s && %v && %s", ctx.MustGet("file"), flags["with-db"], args["user"])
 
@@ -67,9 +76,9 @@ func TestCommand_Run(t *testing.T) {
 				Name: "All Flags types",
 				Root: commands.Command{
 					Flags: []commands.Value{
-						{commands.TypeString, "string"},
-						{commands.TypeBool, "bool"},
-						{commands.TypeInt, "int"},
+						{commands.TypeString, "string", ""},
+						{commands.TypeBool, "bool", ""},
+						{commands.TypeInt, "int", ""},
 					},
 					Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
 						result = fmt.Sprintf("%s && %v && %d", flags["string"], flags["bool"], flags["int"])
@@ -84,9 +93,9 @@ func TestCommand_Run(t *testing.T) {
 				Name: "All Args types",
 				Root: commands.Command{
 					Args: []commands.Value{
-						{commands.TypeString, "string"},
-						{commands.TypeBool, "bool"},
-						{commands.TypeInt, "int"},
+						{commands.TypeString, "string", ""},
+						{commands.TypeBool, "bool", ""},
+						{commands.TypeInt, "int", ""},
 					},
 					Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
 						result = fmt.Sprintf("%s && %v && %d", args["string"], args["bool"], args["int"])
@@ -109,7 +118,15 @@ func TestCommand_Run(t *testing.T) {
 					t.Fatalf("expecting no errors: but obtained: %v", err)
 				}
 
-				if test.Expect != result {
+				var comparison bool
+				switch expect := test.Expect.(type) {
+				case string:
+					comparison = strings.Contains(result.(string), expect)
+				default:
+					comparison = test.Expect == result
+				}
+
+				if !comparison {
 					t.Fatalf("Expecting(%v) is not equal to Obtained(%v)", test.Expect, result)
 				}
 			})
@@ -132,36 +149,36 @@ func TestCommand_Run(t *testing.T) {
 			{
 				Name: "Incomplete String flag",
 				Root: commands.Command{
-					Flags: []commands.Value{{commands.TypeString, "string"}},
+					Flags: []commands.Value{{commands.TypeString, "string", ""}},
 				},
 				Args: []string{"-string"},
 			},
 			{
 				Name: "Incomplete Int flag",
 				Root: commands.Command{
-					Flags: []commands.Value{{commands.TypeInt, "int"}},
+					Flags: []commands.Value{{commands.TypeInt, "int", ""}},
 				},
 				Args: []string{"-int"},
 			},
 			{
 				Name: "Invalid Int flag",
 				Root: commands.Command{
-					Flags: []commands.Value{{commands.TypeInt, "int"}},
+					Flags: []commands.Value{{commands.TypeInt, "int", ""}},
 				},
 				Args: []string{"-int", "sulcud"},
 			},
 			{
 				Name: "Invalid Type flag",
 				Root: commands.Command{
-					Flags: []commands.Value{{0xff, "invalid"}},
+					Flags: []commands.Value{{0xff, "invalid", ""}},
 				},
 				Args: []string{"-invalid", "sulcud"},
 			},
 			{
 				Name: "Subcommand with parent args",
 				Root: commands.Command{
-					Args:  []commands.Value{{commands.TypeString, "user"}},
-					Flags: []commands.Value{{0xff, "invalid"}},
+					Args:  []commands.Value{{commands.TypeString, "user", ""}},
+					Flags: []commands.Value{{0xff, "invalid", ""}},
 					SubCommands: []commands.Command{
 						{
 							Name: "init",
@@ -201,21 +218,21 @@ func TestCommand_Run(t *testing.T) {
 			{
 				Name: "Invalid Int arg",
 				Root: commands.Command{
-					Args: []commands.Value{{commands.TypeInt, "int"}},
+					Args: []commands.Value{{commands.TypeInt, "int", ""}},
 				},
 				Args: []string{"sulcud"},
 			},
 			{
 				Name: "Invalid Arg Type",
 				Root: commands.Command{
-					Args: []commands.Value{{commands.Type(0xff), "int"}},
+					Args: []commands.Value{{commands.Type(0xff), "int", ""}},
 				},
 				Args: []string{"sulcud"},
 			},
 			{
 				Name: "Callback error",
 				Root: commands.Command{
-					Args: []commands.Value{{commands.Type(0xff), "int"}},
+					Args: []commands.Value{{commands.Type(0xff), "int", ""}},
 					Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
 						err = errors.New("error")
 						return

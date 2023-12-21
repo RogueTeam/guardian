@@ -17,10 +17,14 @@ const (
 type (
 	Setup    func(ctx *Context, flags map[string]any) (err error)
 	Callback func(ctx *Context, flags map[string]any, args map[string]any) (result any, err error)
+	Defer    func(ctx *Context, result any) (finalResult any, err error)
 	Value    struct {
 		Type        Type
 		Name        string
 		Description string
+
+		// Reserved for flags
+		Default any
 	}
 	Values  []Value
 	Context struct {
@@ -33,9 +37,10 @@ type (
 		Flags       Values
 		Setup       Setup
 		Callback    Callback
+		Defer       Defer
 		SubCommands Commands
 	}
-	Commands []Command
+	Commands []*Command
 )
 
 func NewContext() *Context {
@@ -73,7 +78,17 @@ func (c *Command) Run(args []string) (result any, err error) {
 
 	ctxArgs := make(map[string]any, len(args))
 	ctxFlags := make(map[string]any, len(args))
+	defers := make([]Defer, 0, len(args))
+
+	// Initialize defaults
+	for _, flag := range curr.Flags {
+		if flag.Default != nil {
+			ctxFlags[flag.Name] = flag.Default
+		}
+	}
+
 	for index := 0; index < len(args); {
+
 		arg := args[index]
 		index++
 
@@ -116,6 +131,12 @@ func (c *Command) Run(args []string) (result any, err error) {
 			// Check if it is a command
 			sub, found := curr.SubCommands[arg]
 			if found { // Is subcommand
+
+				// If it is help message return inmediatly
+				if sub.Name == HelpCommand && sub.Callback != nil {
+					result, err = sub.Callback(ctx, ctxFlags, ctxArgs)
+					return
+				}
 				// Setup should not allow args
 				if len(ctxArgs) > 0 {
 					err = fmt.Errorf("%w: %s", ErrArgsNotAllowedInParent, curr.Name)
@@ -131,12 +152,24 @@ func (c *Command) Run(args []string) (result any, err error) {
 					}
 				}
 
+				// Prepare defer
+				if curr.Defer != nil {
+					defers = append(defers, curr.Defer)
+				}
+
 				// Clear ctx
 				clear(ctxArgs)
 				clear(ctxFlags)
 
 				// Make new current
 				curr = sub
+
+				// Initialize defaults
+				for _, flag := range curr.Flags {
+					if flag.Default != nil {
+						ctxFlags[flag.Name] = flag.Default
+					}
+				}
 			} else { // Is argument
 				argIdx := len(ctxArgs)
 				if argIdx >= len(curr.Args) {
@@ -177,6 +210,22 @@ func (c *Command) Run(args []string) (result any, err error) {
 		result, err = curr.Callback(ctx, ctxFlags, ctxArgs)
 		if err != nil {
 			err = fmt.Errorf("failure during command %s: %w", curr.Name, err)
+			return
+		}
+	}
+
+	if curr.Defer != nil {
+		result, err = curr.Defer(ctx, result)
+		if err != nil {
+			err = fmt.Errorf("failed during defer of command %s: %w", curr.Name, err)
+			return
+		}
+	}
+
+	for index := len(defers) - 1; index >= 0; index-- {
+		result, err = defers[index](ctx, result)
+		if err == nil {
+			break
 		}
 	}
 

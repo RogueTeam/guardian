@@ -5,7 +5,10 @@ import (
 	"github.com/RogueTeam/guardian/internal/commands"
 )
 
-var registered = []commands.Command{
-	subcommands.HelpCommand,
-	subcommands.SecretsCommand,
+var root = commands.Command{
+	Name:        "guardian",
+	Description: "Your portable personal file guardian",
+	SubCommands: commands.Commands{
+		subcommands.SecretsCommand,
+	},
 }

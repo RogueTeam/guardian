@@ -38,22 +38,31 @@ func (cs Commands) Table(prefix string) (s string) {
 	return s
 }
 
+func (c *Command) help(ctx *Context, flags, args map[string]any) (result any, err error) {
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "Usage: %s [-FLAGS] [SUBCOMMAND] [-FLAGS] [ARGS]\n\n", c.Name)
+	fmt.Fprintf(&buf, "Description: %s\n\n", c.Description)
+	if len(c.Flags) > 0 {
+		fmt.Fprintf(&buf, "Flags:\n\n%s\n\n", c.Flags.Table("\t-"))
+	}
+	if len(c.Args) > 0 {
+		fmt.Fprintf(&buf, "Arguments:\n\n%s\n\n", c.Args.Table("\t"))
+	}
+	if len(c.SubCommands) > 0 {
+		fmt.Fprintf(&buf, "Subcommands:\n\n%s\n\n", c.SubCommands.Table("\t"))
+	}
+
+	result = buf.String()
+	return
+}
+
 func (c *Command) setHelp() {
-	help := Command{
+	help := &Command{
 		Name:        HelpCommand,
 		Description: "Prints this help message",
-		Callback: func(ctx *Context, flags, args map[string]any) (result any, err error) {
-			var buf bytes.Buffer
-
-			fmt.Fprintf(&buf, "Usage: %s [-FLAGS] [SUBCOMMAND] [-FLAGS] [ARGS]\n\n", c.Name)
-			fmt.Fprintf(&buf, "Description: %s\n\n", c.Description)
-			fmt.Fprintf(&buf, "Flags:\n\n%s\n\n", c.Flags.Table("\t-"))
-			fmt.Fprintf(&buf, "Arguments:\n\n%s\n\n", c.Args.Table("\t"))
-			fmt.Fprintf(&buf, "Subcommands:\n\n%s\n\n", c.SubCommands.Table("\t"))
-
-			result = buf.String()
-			return
-		},
+		Callback:    c.help,
 	}
+
 	c.SubCommands = append(c.SubCommands, help)
 }

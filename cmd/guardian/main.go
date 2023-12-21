@@ -2,31 +2,15 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
-	"log/slog"
+	"log"
 	"os"
-
-	"github.com/RogueTeam/guardian/internal/commands"
 )
 
-func init() {
-	if len(os.Args) == 1 {
-		fmt.Fprintln(os.Stderr, commands.Usage(registered, os.Args[0]))
-		os.Exit(1)
-	}
-}
-
 func main() {
-	result, err := commands.Handle(registered, os.Args[1:])
+	result, err := root.Run(os.Args[1:])
 	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(os.Stderr, commands.Usage(registered, os.Args[0]))
-			return
-		}
-		slog.Error("Failed to execute command: %v", err)
-		os.Exit(1)
+		log.Fatalf("something went wrong: %v", err)
 	}
 
 	switch result := result.(type) {

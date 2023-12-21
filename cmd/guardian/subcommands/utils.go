@@ -4,9 +4,19 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/user"
 
 	"golang.org/x/term"
 )
+
+func home() string {
+	u, err := user.Current()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return u.HomeDir
+}
 
 func ReadKey(prompt bool) []byte {
 	if prompt {

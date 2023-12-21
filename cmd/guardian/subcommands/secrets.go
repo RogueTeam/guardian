@@ -1,18 +1,16 @@
 package subcommands
 
 import (
-	"crypto/rand"
-	"flag"
 	"fmt"
-	"log"
 	"os"
-	"os/user"
 	"path"
 
 	"github.com/RogueTeam/guardian/crypto"
 	"github.com/RogueTeam/guardian/database"
 	"github.com/RogueTeam/guardian/internal/commands"
 )
+
+var defaultArgon = crypto.DefaultArgon()
 
 type SecretsConfig struct {
 	Database             *string
@@ -25,102 +23,165 @@ type SecretsConfig struct {
 	Init                 *bool
 }
 
-var SecretsCommand = commands.Command{
+func openDBFile(ctx *commands.Context, flags map[string]any) (err error) {
+	filepath := ctx.MustGet("secrets").(string)
+
+	// Open file
+	file, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR, 0777)
+	if err != nil {
+		err = fmt.Errorf("failed to open file: %s: %w", filepath, err)
+		return
+	}
+	ctx.Set("file", file)
+
+	// Setup argon
+	argon := crypto.Argon{
+		Time:    uint32(ctx.MustGet("argon-time").(int)),
+		Memory:  uint32(ctx.MustGet("argon-memory").(int)),
+		Threads: uint8(ctx.MustGet("argon-threads").(int)),
+	}
+	ctx.Set("argon", argon)
+
+	// User key
+	key := ReadKey(!ctx.MustGet("no-prompt").(bool))
+	ctx.Set("key", key)
+
+	return
+}
+
+func setupDB(ctx *commands.Context, flags map[string]any) (err error) {
+	// Open DB file
+	err = openDBFile(ctx, flags)
+	if err != nil {
+		err = fmt.Errorf("failed to open db file: %w", err)
+		return
+	}
+
+	// Dependencies
+	file := ctx.MustGet("file").(*os.File)
+	key := ctx.MustGet("key").([]byte)
+
+	// Prepare database
+	db, err := database.Open(key, file)
+	if err != nil {
+		err = fmt.Errorf("failed to open database: %w", err)
+		return
+	}
+	ctx.Set("db", db)
+
+	return
+}
+
+func deferSaveDB(ctx *commands.Context, result any) (finalResult any, err error) {
+	finalResult = result
+
+	// Dependencies
+	file := ctx.MustGet("file").(*os.File)
+	saltSize := ctx.MustGet("salt-size").(int)
+	argon := ctx.MustGet("argon").(crypto.Argon)
+	key := ctx.MustGet("key").([]byte)
+
+	db := ctx.MustGet("db").(*database.Database)
+
+	// Save changes
+	_, err = file.Seek(0, 0)
+	if err == nil {
+		err = db.Save(key, saltSize, &argon, file)
+	}
+	return
+}
+
+var SecretsCommand = &commands.Command{
 	Name:        "secrets",
 	Description: "Manipulate the database JSON file",
-	Init: func(set *flag.FlagSet) any {
-		argon := crypto.DefaultArgon()
-
-		curr, err := user.Current()
-		if err != nil {
-			log.Fatal(err)
-		}
-		var config SecretsConfig
-		config.Database = set.String("database", path.Join(curr.HomeDir, "guardian.json"), "Database file to use")
-
-		// Get existing entry
-		config.Get = set.String("get", "", "Search for the entry pointed by 'id'")
-
-		// Delete existing entry
-		config.Del = set.String("del", "", "Deletes the entry pointed by 'id'")
-
-		// Set new entry
-		config.Set = set.String("set", "", "Sets a new entry by its 'id'")
-		config.Value = set.String("value", "", "Value to use during -set")
-		// Salt configuration
-		config.SaltSize = set.Int("salt-size", 1024, "Salt size to use during save")
-
-		// Argon settings
-		config.ArgonTime = set.Uint("argon-time", uint(argon.Time), "Argon time to use")
-		config.ArgonMemory = set.Uint("argon-memory", uint(argon.Memory), "Argon memory to use")
-		config.ArgonThreads = set.Uint("argon-threads", uint(argon.Threads), "Argon threads to use")
-
-		// Prompt
-		config.NoPasswordPrompt = set.Bool("no-prompt", false, "No password prompt")
-
-		// Initialize database
-		config.Init = set.Bool("init", false, "Initialize a database file")
-		return config
+	Flags: commands.Values{
+		{Type: commands.TypeString, Name: "secrets", Description: "Secrets database to use", Default: path.Join(home(), "guardian.json")},
+		{Type: commands.TypeInt, Name: "salt-size", Description: "Size of the random salt to read", Default: 1024},
+		{Type: commands.TypeInt, Name: "argon-time", Description: "Argon time config", Default: int(defaultArgon.Time)},
+		{Type: commands.TypeInt, Name: "argon-memory", Description: "Argon memory config", Default: int(defaultArgon.Memory)},
+		{Type: commands.TypeInt, Name: "argon-threads", Description: "Argon threads config", Default: int(defaultArgon.Threads)},
+		{Type: commands.TypeBool, Name: "no-prompt", Description: "No password prompt", Default: false},
 	},
-	Callback: func(config any, args []string) (result any, err error) {
-		// Cast received configuration
-		dbConfig := config.(SecretsConfig)
-
-		// Open file
-		file, err := os.OpenFile(*dbConfig.Database, os.O_CREATE|os.O_RDWR, 0777)
-		if err != nil {
-			err = fmt.Errorf("failed to open file: %s: %w", *dbConfig.Database, err)
-			return
-		}
-		defer file.Close()
-
-		// User key
-		key := ReadKey(!*dbConfig.NoPasswordPrompt)
-		defer rand.Read(key)
-
-		// Setup argon
-		argon := crypto.Argon{
-			Time:    uint32(*dbConfig.ArgonTime),
-			Memory:  uint32(*dbConfig.ArgonMemory),
-			Threads: uint8(*dbConfig.ArgonThreads),
-		}
-
-		// Initialize command
-		if *dbConfig.Init {
-			var db = database.New()
-			err = db.Save(key, *dbConfig.SaltSize, &argon, file)
-			return
-		}
-
-		// Open Database
-		db, err := database.Open(key, file)
-		if err != nil {
-			err = fmt.Errorf("failed to open database: %w", err)
-			return
-		}
-
-		switch {
-		case *dbConfig.Get != "":
-			result, err = db.Get(*dbConfig.Get)
-		case *dbConfig.Del != "":
-			err = db.Del(*dbConfig.Del)
-			if err != nil {
-				return
-			}
-
-			_, err = file.Seek(0, 0)
-			if err == nil {
-				err = db.Save(key, *dbConfig.SaltSize, &argon, file)
-			}
-		case *dbConfig.Set != "":
-			db.Set(*dbConfig.Set, *dbConfig.Value)
-
-			_, err = file.Seek(0, 0)
-			if err == nil {
-				err = db.Save(key, *dbConfig.SaltSize, &argon, file)
-			}
-		}
+	Setup: func(ctx *commands.Context, flags map[string]any) (err error) {
+		ctx.Set("secrets", flags["secrets"])
+		ctx.Set("salt-size", flags["salt-size"])
+		ctx.Set("argon-time", flags["argon-time"])
+		ctx.Set("argon-memory", flags["argon-memory"])
+		ctx.Set("argon-threads", flags["argon-threads"])
+		ctx.Set("no-prompt", flags["no-prompt"])
 
 		return
+	},
+	SubCommands: commands.Commands{
+		{
+			Name:        "init",
+			Description: "Initialize the secrets database",
+			Setup:       openDBFile,
+			Defer:       deferSaveDB,
+			Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
+				// Initialize command
+				var db = database.New()
+				ctx.Set("db", db)
+
+				return
+			},
+		},
+		{
+			Name:        "get",
+			Description: "Retrieves a value from the database by its id",
+			Args: commands.Values{
+				{Type: commands.TypeString, Name: "id", Description: "id of the entry"},
+			},
+			Setup: setupDB,
+			Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
+				// Dependencies
+				db := ctx.MustGet("db").(*database.Database)
+
+				// Retrieve
+				result, err = db.Get(args["id"].(string))
+				if err != nil {
+					err = fmt.Errorf("failed to retrieve value")
+				}
+				return
+			},
+		},
+		{
+			Name:        "del",
+			Description: "Deletes a entry from the database by its id",
+			Args: commands.Values{
+				{Type: commands.TypeString, Name: "id", Description: "id of the entry"},
+			},
+			Setup: setupDB,
+			Defer: deferSaveDB,
+			Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
+				// Dependencies
+				db := ctx.MustGet("db").(*database.Database)
+
+				// Delete
+				err = db.Del(args["id"].(string))
+				if err != nil {
+					err = fmt.Errorf("failed to delete value")
+				}
+				return
+			},
+		},
+		{
+			Name:        "set",
+			Description: "Creates/Updates a entry",
+			Args: commands.Values{
+				{Type: commands.TypeString, Name: "id", Description: "id of the entry"},
+				{Type: commands.TypeString, Name: "value", Description: "value of the entry"},
+			},
+			Setup: setupDB,
+			Defer: deferSaveDB,
+			Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
+				// Dependencies
+				db := ctx.MustGet("db").(*database.Database)
+
+				// Delete
+				db.Set(args["id"].(string), args["value"].(string))
+				return
+			},
+		},
 	},
 }

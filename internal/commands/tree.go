@@ -7,12 +7,15 @@ type node struct {
 	Flags       map[string]Value
 	Setup       Setup
 	Callback    Callback
-	SubCommands map[string]node
+	Defer       Defer
+	SubCommands map[string]*node
 }
 
 const HelpCommand = "help"
 
-func (c *Command) tree() (n node) {
+func (c *Command) tree() (n *node) {
+	n = new(node)
+
 	if c.Name != HelpCommand {
 		c.setHelp()
 	}
@@ -35,8 +38,11 @@ func (c *Command) tree() (n node) {
 	// Callback
 	n.Callback = c.Callback
 
+	// Defer
+	n.Defer = c.Defer
+
 	// SubCommands
-	n.SubCommands = make(map[string]node, len(c.SubCommands))
+	n.SubCommands = make(map[string]*node, len(c.SubCommands))
 	for _, cmd := range c.SubCommands {
 		n.SubCommands[cmd.Name] = cmd.tree()
 	}

@@ -2,82 +2,180 @@ package commands
 
 import (
 	"errors"
-	"flag"
 	"fmt"
-	"strings"
+	"strconv"
+)
+
+type Type uint8
+
+const (
+	TypeString = iota
+	TypeBool
+	TypeInt
 )
 
 type (
-	Init     func(set *flag.FlagSet) any
-	Callback func(config any, args []string) (result any, err error)
-	Command  struct {
-		Name        string
-		Aliases     []string
-		Description string
-		Init        Init
-		Callback    Callback
+	Setup    func(ctx *Context, flags map[string]any) (err error)
+	Callback func(ctx *Context, flags map[string]any, args map[string]any) (result any, err error)
+	Value    struct {
+		Type Type
+		Name string
 	}
-	Commands []Command
+	Context struct {
+		entries map[any]any
+	}
+	Command struct {
+		Name        string
+		Description string
+		Args        []Value
+		Flags       []Value
+		Setup       Setup
+		Callback    Callback
+		SubCommands []Command
+	}
 )
 
-func (c Commands) Map() (m map[string]Command) {
-	m = make(map[string]Command, len(c))
-	for _, cmd := range c {
-		m[cmd.Name] = cmd
-		for _, alias := range cmd.Aliases {
-			m[alias] = cmd
+func NewContext() *Context {
+	return &Context{
+		entries: make(map[any]any),
+	}
+}
+
+func (ctx *Context) Set(key any, value any) {
+	ctx.entries[key] = value
+}
+
+func (ctx *Context) Get(key any) (value any, found bool) {
+	value, found = ctx.entries[key]
+	return
+}
+
+func (ctx *Context) MustGet(key any) (value any) {
+	value, _ = ctx.Get(key)
+	return
+}
+
+var (
+	ErrUnknownType            = errors.New("unknown type")
+	ErrInvalidNumberOfArgs    = errors.New("invalid number of arguments")
+	ErrArgsNotAllowedInParent = errors.New("arguments not allowed in parent")
+	ErrFlagNotFound           = errors.New("flag not found")
+	ErrIncompleteFlag         = errors.New("incomplete flag")
+)
+
+func (c *Command) Run(args []string) (result any, err error) {
+	ctx := NewContext()
+
+	curr := c.tree()
+
+	ctxArgs := make(map[string]any, len(args))
+	ctxFlags := make(map[string]any, len(args))
+	for index := 0; index < len(args); {
+		arg := args[index]
+		index++
+
+		switch arg[0] {
+		case '-': // Is flag
+			flag := arg[1:]
+			fDef, found := curr.Flags[flag]
+			if !found {
+				err = fmt.Errorf("%w: -%s", ErrFlagNotFound, flag)
+				return
+			}
+			switch fDef.Type {
+			case TypeString:
+				if index >= len(args) {
+					err = fmt.Errorf("%w: expecting value for -%s", ErrIncompleteFlag, flag)
+					return
+				}
+				ctxFlags[flag] = args[index]
+				index++
+			case TypeBool:
+				ctxFlags[flag] = true
+			case TypeInt:
+				if index >= len(args) {
+					err = fmt.Errorf("%w: expecting value for -%s", ErrIncompleteFlag, flag)
+					return
+				}
+				var i int
+				i, err = strconv.Atoi(args[index])
+				index++
+				if err != nil {
+					err = fmt.Errorf("failed to parse integer for flag -%s: %w", flag, err)
+					return
+				}
+				ctxFlags[flag] = i
+			default:
+				err = fmt.Errorf("%w: %s", ErrUnknownType, fDef.Name)
+				return
+			}
+		default: // Can be a command or subcommand
+			// Check if it is a command
+			sub, found := curr.SubCommands[arg]
+			if found { // Is subcommand
+				// Setup should not allow args
+				if len(ctxArgs) > 0 {
+					err = fmt.Errorf("%w: %s", ErrArgsNotAllowedInParent, curr.Name)
+					return
+				}
+
+				// Setup parent
+				if curr.Setup != nil {
+					err = curr.Setup(ctx, ctxFlags)
+					if err != nil {
+						err = fmt.Errorf("failed to setup parent command %s: %w", curr.Name, err)
+						return
+					}
+				}
+
+				// Clear ctx
+				clear(ctxArgs)
+				clear(ctxFlags)
+
+				// Make new current
+				curr = sub
+			} else { // Is argument
+				argIdx := len(ctxArgs)
+				if argIdx >= len(curr.Args) {
+					err = fmt.Errorf("%w: %s: expecting %d: %s", ErrInvalidNumberOfArgs, curr.Name, len(curr.Args), arg)
+					return
+				}
+				argEntry := curr.Args[argIdx]
+				switch argEntry.Type {
+				case TypeString:
+					ctxArgs[argEntry.Name] = arg
+				case TypeBool:
+					ctxArgs[argEntry.Name] = arg == "true"
+				case TypeInt:
+					var i int
+					i, err = strconv.Atoi(arg)
+					if err != nil {
+						err = fmt.Errorf("failed to parse integer for argument %s: %w", argEntry.Name, err)
+						return
+					}
+					ctxArgs[argEntry.Name] = i
+				default:
+					err = fmt.Errorf("%w: %s", ErrUnknownType, argEntry.Name)
+					return
+				}
+			}
 		}
 	}
-	return m
-}
 
-func Usage(commands []Command, executable string) (s string) {
-	table := struct {
-		CommandMax   int
-		Commands     []string
-		Descriptions []string
-	}{}
-
-	for _, command := range commands {
-		entry := fmt.Sprintf("%s %s", command.Name, strings.Join(command.Aliases, " "))
-		table.CommandMax = max(table.CommandMax, len(entry))
-		table.Commands = append(table.Commands, entry)
-		table.Descriptions = append(table.Descriptions, command.Description)
+	if curr.Setup != nil {
+		err = curr.Setup(ctx, ctxFlags)
+		if err != nil {
+			err = fmt.Errorf("failed to setup parent command %s: %w", curr.Name, err)
+			return
+		}
 	}
 
-	var builder strings.Builder
-
-	fmt.Fprintf(&builder, "Usage: %s SUBCOMMAND [-FLAGS] [ARGUMENTS]\n\nAvailable subcommands:\n", executable)
-
-	for index, entry := range table.Commands {
-		description := table.Descriptions[index]
-		fmt.Fprintf(&builder, "  %s : %s\n", entry+strings.Repeat(" ", table.CommandMax-len(entry)), description)
+	if curr.Callback != nil {
+		result, err = curr.Callback(ctx, ctxFlags, ctxArgs)
+		if err != nil {
+			err = fmt.Errorf("failure during command %s: %w", curr.Name, err)
+		}
 	}
 
-	s = builder.String()
-	return s
-}
-
-var ErrUnknownCommand = errors.New("unknown command")
-
-func Handle(commands Commands, args []string) (result any, err error) {
-	m := commands.Map()
-	cmd, found := m[args[0]]
-	if !found {
-		err = fmt.Errorf("%w: %s", ErrUnknownCommand, args[0])
-		return
-	}
-
-	set := flag.NewFlagSet(cmd.Name, flag.ExitOnError)
-	var config any
-	if cmd.Init != nil {
-		config = cmd.Init(set)
-	}
-	err = set.Parse(args[1:])
-	if err == nil {
-		result, err = cmd.Callback(config, set.Args())
-	} else if errors.Is(err, flag.ErrHelp) {
-		err = nil
-	}
 	return
 }

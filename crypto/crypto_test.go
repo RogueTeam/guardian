@@ -2,6 +2,7 @@ package crypto_test
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/hex"
 	"testing"
 
@@ -9,7 +10,9 @@ import (
 	"github.com/RogueTeam/guardian/internal/testsuite"
 )
 
-func TestJob_Encrypt_Encrypt(t *testing.T) {
+func Test_Encryption(t *testing.T) {
+	t.Parallel()
+
 	t.Run("Succeed", func(t *testing.T) {
 		t.Parallel()
 
@@ -61,5 +64,46 @@ func TestJob_Encrypt_Encrypt(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestJob_Decrypt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Fail", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("Invalid HMAC", func(t *testing.T) {
+			t.Parallel()
+
+			// Encrypt
+			encryption := crypto.Job{
+				Key:      testsuite.Random(16),
+				Data:     testsuite.Random(16),
+				Argon:    crypto.DefaultArgon(),
+				SaltSize: 16,
+			}
+			defer encryption.Release()
+			secret := encryption.Encrypt()
+			defer secret.Release()
+
+			// Decrypt
+			// Verify decrypted data matches
+			decryption := crypto.Job{
+				Key:      encryption.Key,
+				Argon:    encryption.Argon,
+				SaltSize: encryption.SaltSize,
+			}
+			defer decryption.Release()
+
+			// Corrupt HMAC
+			rand.Read(secret.HMAC)
+
+			// Try decryption
+			err := decryption.Decrypt(secret)
+			if err == nil {
+				t.Fatal("expecting decryption to fail")
+			}
+		})
 	})
 }

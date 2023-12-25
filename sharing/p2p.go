@@ -3,7 +3,6 @@ package sharing
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -19,32 +18,17 @@ type LibP2P struct {
 	Addrs []multiaddr.Multiaddr
 }
 
-func (l *LibP2P) Ping(n int, peerAddr multiaddr.Multiaddr) (pings chan time.Duration, err error) {
+func (l *LibP2P) Ping(n int, info *peer.AddrInfo) (ch <-chan ping.Result, err error) {
 	pingService := &ping.PingService{Host: l.Node}
 	l.Node.SetStreamHandler(ping.ID, pingService.PingHandler)
 
-	peer, err := peer.AddrInfoFromP2pAddr(peerAddr)
+	err = l.Node.Connect(context.Background(), *info)
 	if err != nil {
-		panic(err)
-	}
-	if err := l.Node.Connect(context.Background(), *peer); err != nil {
-		panic(err)
+		err = fmt.Errorf("failed to connect to peer: %w", err)
+		return
 	}
 
-	pings = make(chan time.Duration, 10)
-	go func() {
-		defer close(pings)
-
-		ch := pingService.Ping(context.Background(), peer.ID)
-		for i := 0; i < n; i++ {
-			res := <-ch
-			pings <- res.RTT
-			if res.Error != nil {
-				err = fmt.Errorf("failed to ping: %w", err)
-				break
-			}
-		}
-	}()
+	ch = pingService.Ping(context.Background(), info.ID)
 
 	return
 }

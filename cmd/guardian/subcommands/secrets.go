@@ -146,6 +146,26 @@ var SecretsCommand = &commands.Command{
 			},
 		},
 		{
+			Name:        "list",
+			Description: "List all available keys",
+			Args: commands.Values{
+				{Type: commands.TypeString, Name: "id", Description: "id of the entry"},
+			},
+			Setup: setupDB,
+			Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
+				// Dependencies
+				db := ctx.MustGet("db").(*database.Database)
+
+				// Retrieve
+				names := make([]string, 0, len(db.Secrets))
+				for key := range db.Secrets {
+					names = append(names, key)
+				}
+				result = names
+				return
+			},
+		},
+		{
 			Name:        "del",
 			Description: "Deletes a entry from the database by its id",
 			Args: commands.Values{

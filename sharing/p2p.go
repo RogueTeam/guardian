@@ -8,6 +8,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
+	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -44,10 +46,22 @@ func NewLibP2P(sk crypto.PrivKey, lAddrs ...multiaddr.Multiaddr) (l *LibP2P, err
 
 	node, err := libp2p.New(
 		libp2p.Identity(sk),
+		libp2p.ForceReachabilityPrivate(),
 		lAddrsOption,
 	)
 	if err != nil {
 		err = fmt.Errorf("%w: failed to create host: %w", ErrSharingCreation, err)
+		return
+	}
+
+	idSrv, err := identify.NewIDService(node)
+	if err != nil {
+		err = fmt.Errorf("%w: failed to prepare id service: %w", ErrSharingCreation, err)
+		return
+	}
+	_, err = holepunch.NewService(node, idSrv)
+	if err != nil {
+		err = fmt.Errorf("%w: failed to prepare holepunch service: %w", ErrSharingCreation, err)
 		return
 	}
 

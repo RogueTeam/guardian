@@ -37,6 +37,7 @@ func (h *Handle) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.W
 	}
 	resp.Size = copy(h.Buffer[req.Offset:], req.Data)
 	h.Database.Set(h.Name, string(h.Buffer))
+	err = h.Database.Save(h.File)
 	return
 }
 
@@ -54,5 +55,6 @@ func (h *Handle) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Rea
 
 func (h *Handle) Release(ctx context.Context, req *fuse.ReleaseRequest) (err error) {
 	h.Database.Set(h.Name, string(h.Buffer))
+	err = h.Database.Save(h.File)
 	return
 }

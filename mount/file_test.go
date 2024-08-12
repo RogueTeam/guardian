@@ -143,6 +143,10 @@ func Test_Write(t *testing.T) {
 		}
 
 		var mountConfig mount.Config
+		mountConfig.File, err = os.CreateTemp("", "*")
+		if err != nil {
+			t.Fatal("failed to create fallback file")
+		}
 		mountConfig.Database = db
 		f, err := mount.New(mountConfig)
 		if err != nil {

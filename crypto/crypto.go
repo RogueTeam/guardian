@@ -16,6 +16,8 @@ var (
 	ErrDecryptionFailed = errors.New("decryption failed")
 )
 
+const DefaultSaltSize = 1024
+
 const (
 	ChecksumSize = 512 / 8
 	ChunkSize    = 256

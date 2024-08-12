@@ -26,7 +26,7 @@ var SecretsCommand = &commands.Command{
 	Description: "Manipulate the database JSON file",
 	Flags: commands.Values{
 		{Type: commands.TypeString, Name: Secrets, Description: "Secrets database to use", Default: path.Join(cli.Home(), "guardian.json")},
-		{Type: commands.TypeInt, Name: SaltSize, Description: "Size of the random salt to read", Default: 1024},
+		{Type: commands.TypeInt, Name: SaltSize, Description: "Size of the random salt to read", Default: crypto.DefaultSaltSize},
 		{Type: commands.TypeInt, Name: ArgonTime, Description: "Argon time config", Default: int(defaultArgon.Time)},
 		{Type: commands.TypeInt, Name: ArgonMemory, Description: "Argon memory config", Default: int(defaultArgon.Memory)},
 		{Type: commands.TypeInt, Name: ArgonThreads, Description: "Argon threads config", Default: int(defaultArgon.Threads)},

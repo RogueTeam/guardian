@@ -49,7 +49,12 @@ func setupDB(ctx *commands.Context, flags map[string]any) (err error) {
 	key := ctx.MustGet("key").([]byte)
 
 	// Prepare database
-	db, err := database.Open(key, file)
+	config := database.Config{
+		Key:      key,
+		Argon:    ctx.MustGet("argon").(crypto.Argon),
+		SaltSize: ctx.MustGet("salt-size").(int),
+	}
+	db, err := database.Open(config, file)
 	if err != nil {
 		err = fmt.Errorf("failed to open database: %w", err)
 		return
@@ -64,16 +69,13 @@ func deferSaveDB(ctx *commands.Context, result any) (finalResult any, err error)
 
 	// Dependencies
 	file := ctx.MustGet("file").(*os.File)
-	saltSize := ctx.MustGet("salt-size").(int)
-	argon := ctx.MustGet("argon").(crypto.Argon)
-	key := ctx.MustGet("key").([]byte)
 
 	db := ctx.MustGet(Db).(*database.Database)
 
 	// Save changes
 	_, err = file.Seek(0, 0)
 	if err == nil {
-		err = db.Save(key, saltSize, &argon, file)
+		err = db.Save(file)
 	}
 	return
 }

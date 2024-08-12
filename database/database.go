@@ -19,57 +19,10 @@ import (
 )
 
 type Database struct {
-	Secrets map[string]string `json:"secrets"`
-}
-
-func (db *Database) Set(id string, data string) {
-	db.Secrets[id] = data
-}
-
-func (db *Database) Get(id string) (data string, err error) {
-	data, found := db.Secrets[id]
-	if !found {
-		err = fmt.Errorf("no entry found with id: %s", id)
-	}
-	return
-}
-
-func (db *Database) Del(id string) (err error) {
-	_, found := db.Secrets[id]
-	if !found {
-		err = fmt.Errorf("no entry found with id: %s", id)
-		return
-	}
-
-	delete(db.Secrets, id)
-	return
-}
-
-func (db *Database) List() (names []string, err error) {
-	names = make([]string, 0, len(db.Secrets))
-	for key := range db.Secrets {
-		names = append(names, key)
-	}
-	return
-}
-
-func (db *Database) Save(key []byte, saltSize int, argon *crypto.Argon, w io.Writer) (err error) {
-	var buffer bytes.Buffer
-	json.NewEncoder(&buffer).Encode(db)
-
-	var job = crypto.Job{
-		Key:      make([]byte, len(key)),
-		Data:     buffer.Bytes(),
-		Argon:    *argon,
-		SaltSize: saltSize,
-	}
-	copy(job.Key, key)
-	defer job.Release()
-
-	secret := job.Encrypt()
-	defer secret.Release()
-	err = json.NewEncoder(w).Encode(secret)
-	return
+	Key      []byte
+	SaltSize int
+	Argon    crypto.Argon
+	Secrets  map[string]string `json:"secrets"`
 }
 
 func New() (db *Database) {
@@ -78,7 +31,32 @@ func New() (db *Database) {
 	}
 }
 
-func Open(key []byte, r io.Reader) (db *Database, err error) {
+func (db *Database) Save(w io.Writer) (err error) {
+	var buffer bytes.Buffer
+	json.NewEncoder(&buffer).Encode(db)
+
+	var job = crypto.Job{
+		Key:      make([]byte, len(db.Key)),
+		Data:     buffer.Bytes(),
+		Argon:    db.Argon,
+		SaltSize: db.SaltSize,
+	}
+	copy(job.Key, db.Key)
+	defer job.Release()
+
+	secret := job.Encrypt()
+	defer secret.Release()
+	err = json.NewEncoder(w).Encode(secret)
+	return
+}
+
+type Config struct {
+	Key      []byte
+	Argon    crypto.Argon
+	SaltSize int
+}
+
+func Open(config Config, r io.Reader) (db *Database, err error) {
 	var secret crypto.Secret
 	defer secret.Release()
 	err = json.NewDecoder(r).Decode(&secret)
@@ -88,9 +66,9 @@ func Open(key []byte, r io.Reader) (db *Database, err error) {
 	}
 
 	var job = crypto.Job{
-		Key: make([]byte, len(key)),
+		Key: make([]byte, len(config.Key)),
 	}
-	copy(job.Key, key)
+	copy(job.Key, config.Key)
 	defer job.Release()
 	err = job.Decrypt(&secret)
 	if err != nil {
@@ -99,6 +77,9 @@ func Open(key []byte, r io.Reader) (db *Database, err error) {
 	}
 
 	db = New()
+	db.Key = config.Key
+	db.Argon = config.Argon
+	db.SaltSize = config.SaltSize
 	err = json.Unmarshal(job.Data, db)
 	if err != nil {
 		err = fmt.Errorf("failed to decode JSON database: %w", err)

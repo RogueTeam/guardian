@@ -37,17 +37,24 @@ func TestJson(t *testing.T) {
 				var original bytes.Buffer
 				{
 					var db = database.New()
+					db.Key = key
+					db.Argon = crypto.DefaultArgon()
+					db.SaltSize = crypto.DefaultSaltSize
 					db.Set(test.Id, test.Secret)
 
 					argon := crypto.DefaultArgon()
 					defer argon.Release()
-					err := db.Save(key, 1024, &argon, &original)
+					err := db.Save(&original)
 					if err != nil {
 						t.Fatalf("expecting no errors, but received: %v", err)
 					}
 				}
 
-				db, err := database.Open(key, bytes.NewReader(original.Bytes()))
+				var dbConfig database.Config
+				dbConfig.Key = key
+				dbConfig.Argon = crypto.DefaultArgon()
+				dbConfig.SaltSize = crypto.DefaultSaltSize
+				db, err := database.Open(dbConfig, bytes.NewReader(original.Bytes()))
 				if err != nil {
 					t.Fatalf("expecting no errors, but received: %v", err)
 				}
@@ -82,7 +89,7 @@ func TestJson(t *testing.T) {
 		t.Parallel()
 
 		t.Run("Invalid Secret JSON", func(t *testing.T) {
-			_, err := database.Open(nil, strings.NewReader("["))
+			_, err := database.Open(database.Config{}, strings.NewReader("["))
 			if err == nil {
 				t.Fatal("expecting error")
 			}
@@ -110,7 +117,11 @@ func TestJson(t *testing.T) {
 
 			}
 
-			_, err := database.Open([]byte("INVALID"), bytes.NewReader(original.Bytes()))
+			var dbConfig database.Config
+			dbConfig.Key = []byte("INVALID")
+			dbConfig.Argon = crypto.DefaultArgon()
+			dbConfig.SaltSize = crypto.DefaultSaltSize
+			_, err := database.Open(dbConfig, bytes.NewReader(original.Bytes()))
 			if err == nil {
 				t.Fatal("expecting error")
 			}
@@ -139,7 +150,11 @@ func TestJson(t *testing.T) {
 
 			}
 
-			_, err := database.Open(key, bytes.NewReader(original.Bytes()))
+			var dbConfig database.Config
+			dbConfig.Key = key
+			dbConfig.Argon = crypto.DefaultArgon()
+			dbConfig.SaltSize = crypto.DefaultSaltSize
+			_, err := database.Open(dbConfig, bytes.NewReader(original.Bytes()))
 			if err == nil {
 				t.Fatal("expecting error")
 			}

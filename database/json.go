@@ -45,6 +45,14 @@ func (db *Database) Del(id string) (err error) {
 	return
 }
 
+func (db *Database) List() (names []string, err error) {
+	names = make([]string, 0, len(db.Secrets))
+	for key := range db.Secrets {
+		names = append(names, key)
+	}
+	return
+}
+
 func (db *Database) Save(key []byte, saltSize int, argon *crypto.Argon, w io.Writer) (err error) {
 	var buffer bytes.Buffer
 	json.NewEncoder(&buffer).Encode(db)

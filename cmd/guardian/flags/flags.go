@@ -1,4 +1,4 @@
-package secrets
+package flags
 
 const (
 	ArgonTime    = "argon-time"
@@ -10,4 +10,8 @@ const (
 	Value        = "value"
 	Db           = "db"
 	SaltSize     = "salt-size"
+	MountPoint   = "mount-point"
+	File         = "file"
+	Key          = "key"
+	Argon        = "argon"
 )

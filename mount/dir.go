@@ -3,7 +3,7 @@ package mount
 import (
 	"context"
 	"fmt"
-	"io"
+	"log"
 	"os"
 	"syscall"
 	"time"
@@ -15,7 +15,7 @@ import (
 
 type Dir struct {
 	Inode    uint64
-	File     io.WriteSeeker
+	File     IO
 	Database *database.Database
 }
 
@@ -23,6 +23,7 @@ var (
 	_ fs.Node               = &Dir{}
 	_ fs.HandleReadDirAller = &Dir{}
 	_ fs.NodeStringLookuper = &Dir{}
+	_ fs.NodeCreater        = &Dir{}
 )
 
 func (d *Dir) Attr(ctx context.Context, atr *fuse.Attr) (err error) {
@@ -59,13 +60,30 @@ func (d *Dir) Lookup(ctx context.Context, name string) (node fs.Node, err error)
 	}
 
 	if !found {
-		err = syscall.EEXIST
+		err = syscall.ENOENT
 		return
 	}
 
 	node = &File{
 		Name:     name,
 		Inode:    uint64(time.Now().UnixNano()),
+		File:     d.File,
+		Database: d.Database,
+	}
+	return
+}
+
+func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.CreateResponse) (node fs.Node, h fs.Handle, err error) {
+	log.Println("Creating")
+	d.Database.Set(req.Name, "")
+	node = &File{
+		Name:     req.Name,
+		Inode:    uint64(time.Now().UnixNano()),
+		File:     d.File,
+		Database: d.Database,
+	}
+	h = &Handle{
+		Name:     req.Name,
 		File:     d.File,
 		Database: d.Database,
 	}

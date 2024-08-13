@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"log"
 
 	"bazil.org/fuse"
 	"bazil.org/fuse/fs"
@@ -15,8 +15,8 @@ type Handle struct {
 	Name string
 
 	Buffer   []byte
-	File     io.WriteSeeker
-	Database database.Database
+	File     IO
+	Database *database.Database
 }
 
 var (
@@ -27,8 +27,7 @@ var (
 )
 
 func (h *Handle) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.WriteResponse) (err error) {
-	defer func() { fmt.Println("Final", string(h.Buffer)) }()
-
+	log.Println("Writing")
 	grow := req.Offset + int64(len(req.Data))
 	if int64(len(h.Buffer)) < grow {
 		newBuffer := make([]byte, grow)
@@ -41,6 +40,7 @@ func (h *Handle) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.W
 }
 
 func (h *Handle) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) (err error) {
+	log.Println("Reading")
 	if req.Offset > int64(len(h.Buffer)) {
 		err = errors.New("index out of range")
 		return
@@ -53,10 +53,23 @@ func (h *Handle) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Rea
 }
 
 func (h *Handle) Release(ctx context.Context, req *fuse.ReleaseRequest) (err error) {
+	log.Println("Releasing")
 	h.Database.Set(h.Name, string(h.Buffer))
-	if h.File != nil {
-		h.File.Seek(0, 0)
-		err = h.Database.Save(h.File)
+	if h.File == nil {
+		return
+	}
+
+	log.Println("Saving changes")
+	h.File.Seek(0, 0)
+	err = h.Database.Save(h.File)
+	if err != nil {
+		err = fmt.Errorf("failed to save changes in DB: %w", err)
+		return
+	}
+	err = h.File.Sync()
+	if err != nil {
+		err = fmt.Errorf("failed to sync changes: %w", err)
+		return
 	}
 	return
 }

@@ -1,7 +1,6 @@
 package mount
 
 import (
-	"io"
 	"time"
 
 	"bazil.org/fuse/fs"
@@ -9,7 +8,7 @@ import (
 )
 
 type FS struct {
-	File     io.WriteSeeker
+	File     IO
 	Database *database.Database
 }
 

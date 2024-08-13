@@ -6,13 +6,18 @@ import (
 	"github.com/RogueTeam/guardian/database"
 )
 
+type IO interface {
+	io.WriteSeeker
+	Sync() (err error)
+}
+
 const (
 	Name = "guardian"
 	Type = "guardian"
 )
 
 type Config struct {
-	File     io.WriteSeeker
+	File     IO
 	Database *database.Database
 }
 

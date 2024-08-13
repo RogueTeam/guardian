@@ -3,7 +3,6 @@ package mount
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 
 	"bazil.org/fuse"
@@ -15,7 +14,7 @@ type File struct {
 	Name  string
 	Inode uint64
 
-	File     io.WriteSeeker
+	File     IO
 	Database *database.Database
 }
 
@@ -56,7 +55,7 @@ func (f *File) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenR
 		Name:     f.Name,
 		File:     f.File,
 		Buffer:   []byte(sData),
-		Database: *f.Database,
+		Database: f.Database,
 	}
 	return
 }

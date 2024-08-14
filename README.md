@@ -8,6 +8,12 @@ Guardian is a JSON backed secret manager inspired in UNIX file experience.
 - [X] Mount JSON secret database as a filesystem
 - [ ] Share your secrets in a P2P, Zero Trust manner
 
+## Install
+
+```shell
+go install github.com/RogueTeam/guardian/cmd/guardian@latest
+```
+
 ## CLI
 
 - CLI tool

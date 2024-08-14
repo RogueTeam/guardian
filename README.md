@@ -20,7 +20,7 @@ go install github.com/RogueTeam/guardian/cmd/guardian@latest
 
 ```shell
 guardian secrets help
-```shell
+```
 
 Example:
 

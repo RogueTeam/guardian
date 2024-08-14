@@ -68,12 +68,18 @@ func Open(config Config, r io.Reader) (db *Database, err error) {
 	var job = crypto.Job{
 		Key: make([]byte, len(config.Key)),
 	}
-	copy(job.Key, config.Key)
-	defer job.Release()
-	err = job.Decrypt(&secret)
-	if err != nil {
-		err = fmt.Errorf("error during decryption: %w", err)
-		return
+	if secret.Argon.Memory != 0 &&
+		secret.Argon.Threads != 0 &&
+		secret.Argon.Time != 0 {
+		copy(job.Key, config.Key)
+		defer job.Release()
+		err = job.Decrypt(&secret)
+		if err != nil {
+			err = fmt.Errorf("error during decryption: %w", err)
+			return
+		}
+	} else {
+		job.Data = []byte("{}")
 	}
 
 	db = New()

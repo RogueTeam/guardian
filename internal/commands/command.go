@@ -3,6 +3,8 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"strconv"
 )
 
@@ -13,6 +15,19 @@ const (
 	TypeBool
 	TypeInt
 )
+
+var CtrlChannel chan os.Signal
+
+var ctrlChannelFilters []func(ch chan os.Signal, filter os.Signal)
+
+func init() {
+	if CtrlChannel != nil {
+		return
+	}
+
+	CtrlChannel = make(chan os.Signal, 10)
+	signal.Notify(CtrlChannel, os.Interrupt, os.Kill)
+}
 
 type (
 	Setup    func(ctx *Context, flags map[string]any) (err error)
@@ -198,20 +213,33 @@ func (c *Command) Run(args []string) (result any, err error) {
 		}
 	}
 
-	if curr.Setup != nil {
-		err = curr.Setup(ctx, ctxFlags)
-		if err != nil {
-			err = fmt.Errorf("failed to setup parent command %s: %w", curr.Name, err)
-			return
-		}
-	}
+	done := make(chan struct{}, 1)
+	defer close(done)
+	go func() {
+		defer func() { done <- struct{}{} }()
 
-	if curr.Callback != nil {
-		result, err = curr.Callback(ctx, ctxFlags, ctxArgs)
-		if err != nil {
-			err = fmt.Errorf("failure during command %s: %w", curr.Name, err)
-			return
+		if curr.Setup != nil {
+			err = curr.Setup(ctx, ctxFlags)
+			if err != nil {
+				err = fmt.Errorf("failed to setup parent command %s: %w", curr.Name, err)
+				return
+			}
 		}
+
+		if curr.Callback != nil {
+			result, err = curr.Callback(ctx, ctxFlags, ctxArgs)
+			if err != nil {
+				err = fmt.Errorf("failure during command %s: %w", curr.Name, err)
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+		break
+	case <-CtrlChannel:
+		break
 	}
 
 	if curr.Defer != nil {

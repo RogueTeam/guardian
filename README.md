@@ -1,6 +1,6 @@
 # guardian
 
-Guardian is a JSON backed secret manager inspired in UNIX file experience.
+Use untrusted data stores with a dead simple secret manager CLI. Do not trust GDrive, S3 and really any non self-hosted service. Encrypt your files during writes
 
 ## Features
 

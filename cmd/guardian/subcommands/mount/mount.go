@@ -19,6 +19,8 @@ import (
 
 var defaultArgon = crypto.DefaultArgon()
 
+const MountPointKey = "mount-point"
+
 var MountCommand = &commands.Command{
 	Name:        "mount",
 	Description: "Experimental mount utility",
@@ -49,6 +51,23 @@ var MountCommand = &commands.Command{
 
 		return
 	},
+	Defer: func(ctx *commands.Context, result any) (finalResult any, err error) {
+		log.Println("Saving file...")
+		file := ctx.MustGet(cliflags.File).(*os.File)
+
+		log.Println("- Saving Database")
+		err = ctx.MustGet(cliflags.Db).(*database.Database).Save(file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to save database: %w", err)
+		}
+
+		log.Println("- Closing file")
+		err = file.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to close file: %w", err)
+		}
+		return nil, nil
+	},
 	Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {
 		var config mount.Config
 		config.Database = ctx.MustGet(cliflags.Db).(*database.Database)
@@ -60,11 +79,14 @@ var MountCommand = &commands.Command{
 		}
 
 		mountPoint := args[cliflags.MountPoint].(string)
+		ctx.Set(MountPointKey, mountPoint)
+
 		c, err := fuse.Mount(
 			mountPoint,
 			fuse.FSName(mount.Name),
 			fuse.Subtype(mount.Type),
 		)
+
 		if err != nil {
 			err = fmt.Errorf("failed to mount location: %w", err)
 			return

@@ -66,6 +66,7 @@ var MountCommand = &commands.Command{
 		if err != nil {
 			return nil, fmt.Errorf("failed to close file: %w", err)
 		}
+
 		return nil, nil
 	},
 	Callback: func(ctx *commands.Context, flags, args map[string]any) (result any, err error) {

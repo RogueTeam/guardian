@@ -14,11 +14,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/RogueTeam/guardian/crypto"
 )
 
 type Database struct {
+	mutex    *sync.Mutex
 	Key      []byte
 	SaltSize int
 	Argon    crypto.Argon
@@ -27,11 +29,15 @@ type Database struct {
 
 func New() (db *Database) {
 	return &Database{
+		mutex:   &sync.Mutex{},
 		Secrets: make(map[string]string),
 	}
 }
 
 func (db *Database) Save(w io.Writer) (err error) {
+	db.mutex.Lock()
+	defer db.mutex.Unlock()
+
 	var buffer bytes.Buffer
 	json.NewEncoder(&buffer).Encode(db)
 

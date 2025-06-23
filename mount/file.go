@@ -3,6 +3,7 @@ package mount
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
 	"bazil.org/fuse"
@@ -22,6 +23,7 @@ var (
 	_ fs.Node            = &File{}
 	_ fs.HandleReadAller = &File{}
 	_ fs.NodeOpener      = &File{}
+	_ fs.NodeFsyncer     = &File{}
 )
 
 func (f *File) Attr(ctx context.Context, atr *fuse.Attr) (err error) {
@@ -47,6 +49,11 @@ func (f *File) ReadAll(ctx context.Context) (data []byte, err error) {
 
 	data = []byte(sData)
 	return
+}
+
+func (f *File) Fsync(ctx context.Context, req *fuse.FsyncRequest) (err error) {
+	log.Println("Fsync")
+	return nil
 }
 
 func (f *File) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenResponse) (h fs.Handle, err error) {

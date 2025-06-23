@@ -3,7 +3,6 @@ package mount
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 
 	"bazil.org/fuse"
@@ -24,6 +23,7 @@ var (
 	_ fs.HandleWriter   = &Handle{}
 	_ fs.HandleReader   = &Handle{}
 	_ fs.HandleReleaser = &Handle{}
+	_ fs.HandleFlusher  = &Handle{}
 )
 
 func (h *Handle) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.WriteResponse) (err error) {
@@ -36,7 +36,10 @@ func (h *Handle) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.W
 	}
 	resp.Size = copy(h.Buffer[req.Offset:], req.Data)
 	h.Database.Set(h.Name, string(h.Buffer))
-	return
+
+	log.Println("- Setting")
+	h.Database.Set(h.Name, string(h.Buffer))
+	return nil
 }
 
 func (h *Handle) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) (err error) {
@@ -52,24 +55,25 @@ func (h *Handle) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Rea
 	return
 }
 
+func (h *Handle) Flush(ctx context.Context, req *fuse.FlushRequest) (err error) {
+	log.Println("Flushing")
+
+	log.Println("- Setting")
+	h.Database.Set(h.Name, string(h.Buffer))
+	if h.File == nil {
+		return
+	}
+	return nil
+}
+
 func (h *Handle) Release(ctx context.Context, req *fuse.ReleaseRequest) (err error) {
 	log.Println("Releasing")
+
+	log.Println("- Setting")
 	h.Database.Set(h.Name, string(h.Buffer))
 	if h.File == nil {
 		return
 	}
 
-	log.Println("Saving changes")
-	h.File.Seek(0, 0)
-	err = h.Database.Save(h.File)
-	if err != nil {
-		err = fmt.Errorf("failed to save changes in DB: %w", err)
-		return
-	}
-	err = h.File.Sync()
-	if err != nil {
-		err = fmt.Errorf("failed to sync changes: %w", err)
-		return
-	}
 	return
 }

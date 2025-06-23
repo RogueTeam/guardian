@@ -24,6 +24,7 @@ var (
 	_ fs.HandleReadDirAller = &Dir{}
 	_ fs.NodeStringLookuper = &Dir{}
 	_ fs.NodeCreater        = &Dir{}
+	_ fs.NodeRemover        = &Dir{}
 )
 
 func (d *Dir) Attr(ctx context.Context, atr *fuse.Attr) (err error) {
@@ -31,14 +32,24 @@ func (d *Dir) Attr(ctx context.Context, atr *fuse.Attr) (err error) {
 	atr.Uid = uint32(os.Getuid())
 	atr.Gid = uint32(os.Getgid())
 	atr.Mode = os.ModeDir | 0o600
-	return
+	return nil
+}
+
+func (d *Dir) Remove(ctx context.Context, req *fuse.RemoveRequest) (err error) {
+	log.Println("Removing")
+	err = d.Database.Del(req.Name)
+	if err != nil {
+		return fmt.Errorf("failed to delete node: %w", err)
+	}
+
+	return nil
 }
 
 func (d *Dir) ReadDirAll(ctx context.Context) (paths []fuse.Dirent, err error) {
 	entries, err := d.Database.List()
 	if err != nil {
-		err = fmt.Errorf("failed to list secrets: %w", err)
-		return
+		return paths, fmt.Errorf("failed to list secrets: %w", err)
+
 	}
 	paths = make([]fuse.Dirent, len(entries))
 	for index, entry := range entries {

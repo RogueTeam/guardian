@@ -1,3 +1,5 @@
+# Consider using: [gocryptfs](https://github.com/rfjakob/gocryptfs)
+
 # guardian
 
 Use untrusted data stores with a dead simple secret manager CLI. Do not trust GDrive, S3 and really any non self-hosted service. Encrypt your files during writes
